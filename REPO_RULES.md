@@ -20,3 +20,10 @@
    generalized wording, no Co-Authored-By trailers, one author.
 6. **Honesty.** The IDE renders engine truths. It never fakes
    capability, numbers, or readiness; paper/dry-run are defaults.
+7. **Building (macOS dev).** `cargo build -p zed --features
+   gpui_platform/runtime_shaders` from the repo root — no full Xcode
+   needed for dev builds (runtime shader compilation); release
+   builds use precompiled shaders in CI. Build into the LOCAL
+   `target/` only; never point CARGO_TARGET_DIR at another checkout
+   — a stale external cache means you may run a binary that does not
+   match this tree.
