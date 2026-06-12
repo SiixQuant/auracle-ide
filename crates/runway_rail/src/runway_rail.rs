@@ -157,9 +157,12 @@ impl Render for RunwayRail {
             }))
             .child(div().flex_1())
             .child(
-                Label::new("Not connected to the engine's runway yet.")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
+                Label::new(
+                    "Nothing to do here yet — this rail lights up after a \
+                     future Auracle engine update.",
+                )
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
             )
     }
 }
