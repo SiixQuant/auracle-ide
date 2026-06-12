@@ -345,7 +345,8 @@ impl ExtensionStore {
             }
             this.update(cx, |this, cx| this.auto_install_extensions(cx))
                 .ok();
-            this.update(cx, |this, cx| this.check_for_updates(cx)).ok();
+            // Auracle fork: no automatic update check at startup —
+            // updates remain user-initiated from the Extensions page.
         })
         .detach();
 
