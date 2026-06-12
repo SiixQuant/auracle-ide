@@ -15484,6 +15484,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "runway_rail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "rust-embed"
 version = "8.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22917,6 +22927,7 @@ dependencies = [
  "repl",
  "reqwest_client",
  "rope",
+ "runway_rail",
  "search",
  "semver",
  "serde",

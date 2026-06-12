@@ -48,6 +48,14 @@ pub fn suggest_on_worktree_updated(
         return;
     }
 
+    // Auracle fork: no unsolicited toast at boot — the prompt
+    // competes with the first-boot primary action (council R1/R2).
+    // Dev-container reopen stays available when explicitly requested
+    // from the CLI.
+    if !cli_auto_open {
+        return;
+    }
+
     let Some(worktree) = project.read(cx).worktree_for_id(worktree_id, cx) else {
         return;
     };

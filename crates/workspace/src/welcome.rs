@@ -444,9 +444,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            "Welcome back to Zed"
+            "Welcome back to Auracle IDE"
         } else {
-            "Welcome to Zed"
+            "Welcome to Auracle IDE"
         };
 
         h_flex()
@@ -476,10 +476,13 @@ impl Render for WelcomePage {
                             .child(Vector::square(VectorName::ZedLogo, rems_from_px(45.)))
                             .child(
                                 v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new("The editor for what's next")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted)
-                                        .italic(),
+                                    Label::new(
+                                        "Take an idea down the runway: Research → Build → \
+                                         Validate → Paper → Go live → Monitor.",
+                                    )
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .italic(),
                                 ),
                             ),
                     )

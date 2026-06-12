@@ -213,10 +213,10 @@ impl ReleaseChannel {
     /// This also has to match the bundle identifier for Zed on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "dev.zed.Zed-Dev",
-            ReleaseChannel::Nightly => "dev.zed.Zed-Nightly",
-            ReleaseChannel::Preview => "dev.zed.Zed-Preview",
-            ReleaseChannel::Stable => "dev.zed.Zed",
+            ReleaseChannel::Dev => "com.aurapointcapital.AuracleIDE-Dev",
+            ReleaseChannel::Nightly => "com.aurapointcapital.AuracleIDE-Nightly",
+            ReleaseChannel::Preview => "com.aurapointcapital.AuracleIDE-Preview",
+            ReleaseChannel::Stable => "com.aurapointcapital.AuracleIDE",
         }
     }
 
