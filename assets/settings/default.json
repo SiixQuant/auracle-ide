@@ -62,6 +62,10 @@
   "ui_font_features": {
     // Disable ligatures:
     "calt": false,
+    // Tabular figures everywhere financial numbers can appear — a
+    // no-op for the bundled UI font (tabular by design), insurance
+    // against user font overrides.
+    "tnum": true,
   },
   // The weight of the UI font in standard CSS units from 100 to 900.
   "ui_font_weight": 400,
