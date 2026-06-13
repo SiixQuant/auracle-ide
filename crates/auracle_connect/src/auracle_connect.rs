@@ -212,15 +212,23 @@ impl ModalView for ConnectModal {}
 
 impl Render for ConnectModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let verdict: Option<(bool, SharedString)> = match &self.state {
+        // Color the verdict honestly: an in-flight test is NEUTRAL, not
+        // green — green is reserved for an engine-confirmed success.
+        let verdict: Option<(Color, SharedString)> = match &self.state {
             TestState::Idle => None,
-            TestState::Testing => Some((true, "Testing…".into())),
-            TestState::Verdict { ok, plain } => Some((*ok, plain.clone())),
+            TestState::Testing => Some((Color::Muted, "Testing…".into())),
+            TestState::Verdict { ok, plain } => Some((
+                if *ok { Color::Success } else { Color::Error },
+                plain.clone(),
+            )),
         };
 
         v_flex()
             .key_context("ConnectModal")
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
+                cx.emit(DismissEvent);
+            }))
             .w(rems(34.))
             .p_4()
             .gap_3()
@@ -252,12 +260,8 @@ impl Render for ConnectModal {
                     )
                     .child(self.key_editor.clone()),
             )
-            .when_some(verdict, |this, (ok, plain)| {
-                this.child(
-                    Label::new(plain)
-                        .size(LabelSize::Small)
-                        .color(if ok { Color::Success } else { Color::Error }),
-                )
+            .when_some(verdict, |this, (color, plain)| {
+                this.child(Label::new(plain).size(LabelSize::Small).color(color))
             })
             .child(
                 h_flex()

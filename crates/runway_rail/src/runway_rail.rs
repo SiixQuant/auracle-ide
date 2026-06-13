@@ -305,15 +305,15 @@ impl Render for RunwayRail {
                 } else {
                     (Some("to do"), Color::Muted)
                 };
+                // Informational rows — no background hover highlight (a
+                // stage isn't a button yet; its document doesn't exist).
+                // The tooltip carries the engine's evidence sentence.
                 h_flex()
                     .id(ix)
                     .px_1()
                     .py_0p5()
                     .gap_2()
                     .rounded_sm()
-                    .hover(|style| {
-                        style.bg(cx.theme().colors().ghost_element_hover)
-                    })
                     .child(
                         Icon::new(icon)
                             .size(IconSize::XSmall)
@@ -331,15 +331,43 @@ impl Render for RunwayRail {
                     .tooltip(Tooltip::text(tooltip_text))
             }))
             .child(div().flex_1())
-            .child(
-                Label::new(if connected {
-                    "Live from your engine."
-                } else {
-                    "Nothing to do here yet — this rail lights up after \
-                     you connect your Auracle engine."
-                })
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-            )
+            .when(connected, |rail| {
+                rail.child(
+                    div().px_1().pb_1().child(
+                        Label::new("Live from your engine.")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
+                )
+            })
+            .when(!connected, |rail| {
+                // Not connected: give the user the same forward action
+                // every other panel offers, so the locked rail never
+                // strands a first-time user (council B-14).
+                rail.child(
+                    v_flex()
+                        .px_1()
+                        .pb_1()
+                        .gap_1()
+                        .child(
+                            Label::new(
+                                "This rail lights up once it can reach \
+                                 your Auracle engine.",
+                            )
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                        )
+                        .child(
+                            Button::new("runway-connect", "Connect…")
+                                .style(ButtonStyle::Filled)
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(auracle_connect::Connect),
+                                        cx,
+                                    );
+                                }),
+                        ),
+                )
+            })
     }
 }

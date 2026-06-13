@@ -1388,6 +1388,7 @@ dependencies = [
  "futures 0.3.32",
  "gpui",
  "http_client",
+ "menu",
  "paths",
  "serde",
  "serde_json",
