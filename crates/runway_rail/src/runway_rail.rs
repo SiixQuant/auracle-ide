@@ -2,15 +2,21 @@
 //! Auracle IDE (Research → Build → Validate → Paper → Go live →
 //! Monitor).
 //!
-//! This is the geometry-reserving placeholder demanded by the design
-//! council: every stage renders locked, with plain-word hints, until
-//! the engine exposes its stage/gate truth API. The rail never
-//! invents progress — a stage lights up only when the engine says so.
+//! When connected, the rail renders the ENGINE's runway truth
+//! (`/ui/api/runway`): stages with real evidence light up and carry
+//! their evidence sentence; stages the engine cannot prove stay
+//! locked with the engine's honest "can't tell yet" line. The rail
+//! never invents progress. Unconnected installs keep the teaching
+//! placeholder.
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
+use futures::AsyncReadExt as _;
 use gpui::{
-    App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, WeakEntity,
-    Window, actions, px,
+    App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
+    Task, WeakEntity, Window, actions, px,
 };
 use ui::Tooltip;
 use ui::prelude::*;
@@ -25,13 +31,15 @@ actions!(
     ]
 );
 
-const STAGES: [(&str, &str); 6] = [
-    ("Research", "Look at markets, data, and ideas."),
-    ("Build", "Shape an idea into a strategy."),
-    ("Validate", "Test it against the past, honestly."),
-    ("Paper", "Practice with pretend money."),
-    ("Go live", "Real money — only after every gate is green."),
-    ("Monitor", "Watch everything that runs."),
+const POLL_EVERY: Duration = Duration::from_secs(60);
+
+const STAGES: [(&str, &str, &str); 6] = [
+    ("research", "Research", "Look at markets, data, and ideas."),
+    ("build", "Build", "Shape an idea into a strategy."),
+    ("validate", "Validate", "Test it against the past, honestly."),
+    ("paper", "Paper", "Practice with pretend money."),
+    ("go_live", "Go live", "Real money — only after every gate is green."),
+    ("monitor", "Monitor", "Watch everything that runs."),
 ];
 
 pub fn init(cx: &mut App) {
@@ -43,8 +51,23 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+#[derive(Clone, Default)]
+struct StageTruth {
+    reached: SharedString,  // "yes" | "no" | "unknown"
+    evidence: SharedString, // the engine's plain sentence
+}
+
+#[derive(Clone, Default)]
+struct RunwayTruth {
+    stages: std::collections::HashMap<String, StageTruth>,
+    current: Option<SharedString>,
+}
+
 pub struct RunwayRail {
     focus_handle: FocusHandle,
+    truth: Option<RunwayTruth>,
+    connected: bool,
+    _poll: Task<()>,
 }
 
 impl RunwayRail {
@@ -53,11 +76,105 @@ impl RunwayRail {
         mut cx: AsyncWindowContext,
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
-            cx.new(|cx| Self {
-                focus_handle: cx.focus_handle(),
+            cx.new(|cx| {
+                cx.observe_global::<auracle_connect::ConnectGeneration>(
+                    |this: &mut Self, cx| {
+                        this.truth = None;
+                        cx.notify();
+                    },
+                )
+                .detach();
+                let poll = Self::spawn_poll(cx);
+                Self {
+                    focus_handle: cx.focus_handle(),
+                    truth: None,
+                    connected: false,
+                    _poll: poll,
+                }
             })
         })
     }
+
+    fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            loop {
+                let fetched = fetch_runway(http.clone()).await;
+                let ok = this
+                    .update(cx, |this, cx| {
+                        match fetched {
+                            Some(truth) => {
+                                this.truth = Some(truth);
+                                this.connected = true;
+                            }
+                            None => {
+                                this.connected = false;
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !ok {
+                    return;
+                }
+                cx.background_executor().timer(POLL_EVERY).await;
+            }
+        })
+    }
+}
+
+async fn fetch_runway(http: Arc<dyn http_client::HttpClient>) -> Option<RunwayTruth> {
+    let config = auracle_connect::load_config();
+    let key = config.api_key.filter(|k| !k.trim().is_empty())?;
+    let url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let attempt: Result<RunwayTruth> = async {
+        let request = http_client::http::Request::builder()
+            .uri(format!("{url}/ui/api/runway"))
+            .header("Cookie", format!("auracle_session={key}"))
+            .body(http_client::AsyncBody::default())?;
+        let mut response = http.send(request).await?;
+        if !response.status().is_success() {
+            anyhow::bail!("status {}", response.status());
+        }
+        let mut body = String::new();
+        response.body_mut().read_to_string(&mut body).await?;
+        let value: serde_json::Value = serde_json::from_str(&body)?;
+        let mut truth = RunwayTruth {
+            current: value
+                .get("current")
+                .and_then(|v| v.as_str())
+                .map(|s| SharedString::from(s.to_string())),
+            ..Default::default()
+        };
+        if let Some(stages) = value.get("stages").and_then(|v| v.as_object()) {
+            for (name, stage) in stages {
+                truth.stages.insert(
+                    name.clone(),
+                    StageTruth {
+                        reached: SharedString::from(
+                            stage
+                                .get("reached")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                        ),
+                        evidence: SharedString::from(
+                            stage
+                                .get("evidence")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
+                    },
+                );
+            }
+        }
+        Ok(truth)
+    }
+    .await;
+    attempt.ok()
 }
 
 impl EventEmitter<PanelEvent> for RunwayRail {}
@@ -120,6 +237,9 @@ impl Panel for RunwayRail {
 
 impl Render for RunwayRail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let truth = self.truth.clone();
+        let connected = self.connected && truth.is_some();
+
         v_flex()
             .key_context("RunwayRail")
             .track_focus(&self.focus_handle)
@@ -134,33 +254,67 @@ impl Render for RunwayRail {
                         .color(Color::Muted),
                 ),
             )
-            .children(STAGES.iter().enumerate().map(|(ix, (name, hint))| {
-                let tooltip_text: SharedString = format!(
-                    "{hint} Locked — this stage lights up when your Auracle engine \
-                     starts tracking the runway."
-                )
-                .into();
+            .children(STAGES.iter().enumerate().map(|(ix, (key, name, hint))| {
+                let stage = truth
+                    .as_ref()
+                    .and_then(|t| t.stages.get(*key))
+                    .cloned()
+                    .unwrap_or_default();
+                let reached = stage.reached.as_ref() == "yes";
+                let is_current = truth
+                    .as_ref()
+                    .and_then(|t| t.current.as_ref())
+                    .map(|c| c.as_ref() == *key)
+                    .unwrap_or(false);
+                let tooltip_text: SharedString = if connected
+                    && !stage.evidence.is_empty()
+                {
+                    stage.evidence.clone()
+                } else {
+                    format!(
+                        "{hint} Locked — this stage lights up when your \
+                         Auracle engine starts tracking the runway."
+                    )
+                    .into()
+                };
+                let (icon, icon_color, label_color) = if reached {
+                    (
+                        IconName::Check,
+                        Color::Success,
+                        if is_current {
+                            Color::Accent
+                        } else {
+                            Color::Default
+                        },
+                    )
+                } else {
+                    (IconName::LockOutlined, Color::Disabled, Color::Disabled)
+                };
                 h_flex()
                     .id(ix)
                     .px_1()
                     .py_0p5()
                     .gap_2()
                     .rounded_sm()
-                    .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
+                    .hover(|style| {
+                        style.bg(cx.theme().colors().ghost_element_hover)
+                    })
                     .child(
-                        Icon::new(IconName::LockOutlined)
+                        Icon::new(icon)
                             .size(IconSize::XSmall)
-                            .color(Color::Disabled),
+                            .color(icon_color),
                     )
-                    .child(Label::new(*name).color(Color::Disabled))
+                    .child(Label::new(*name).color(label_color))
                     .tooltip(Tooltip::text(tooltip_text))
             }))
             .child(div().flex_1())
             .child(
-                Label::new(
-                    "Nothing to do here yet — this rail lights up after a \
-                     future Auracle engine update.",
-                )
+                Label::new(if connected {
+                    "Live from your engine."
+                } else {
+                    "Nothing to do here yet — this rail lights up after \
+                     you connect your Auracle engine."
+                })
                 .size(LabelSize::XSmall)
                 .color(Color::Muted),
             )

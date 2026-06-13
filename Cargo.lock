@@ -15532,7 +15532,11 @@ name = "runway_rail"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
  "gpui",
+ "http_client",
+ "serde_json",
  "ui",
  "workspace",
 ]
