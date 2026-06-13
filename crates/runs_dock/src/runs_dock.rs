@@ -361,12 +361,19 @@ impl Render for RunsDock {
                 .id("runs-scroll")
                 .size_full()
                 .overflow_y_scroll()
-                .children(self.rows.iter().map(|row| {
+                .children(self.rows.iter().enumerate().map(|(ix, row)| {
                     let color = self.kind_color(&row.kind, cx);
+                    // The colored dot's meaning, on hover, for the power
+                    // user — the plain sentence is the novice layer.
+                    let kind = row.kind.clone();
                     h_flex()
+                        .id(("run-row", ix))
                         .px_2()
                         .py_0p5()
                         .gap_2()
+                        .tooltip(move |_, cx| {
+                            ui::Tooltip::simple(kind.clone(), cx)
+                        })
                         .child(
                             div()
                                 .size_1p5()
@@ -402,6 +409,11 @@ impl Render for RunsDock {
                     .border_color(cx.theme().colors().border_variant)
                     .child(
                         Label::new("RUNS")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("· Monitor")
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )

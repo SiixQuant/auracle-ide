@@ -253,7 +253,9 @@ impl Render for BlotterPanel {
                     .color(Color::Muted),
             )
             .child(
-                Label::new("order activity")
+                // Provenance, so a novice never mistakes this for a
+                // live broker feed: it's Auracle's own order records.
+                Label::new("· Monitor · from your records")
                     .size(LabelSize::XSmall)
                     .color(Color::Muted),
             );

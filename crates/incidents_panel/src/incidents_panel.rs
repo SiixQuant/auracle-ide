@@ -365,6 +365,11 @@ impl Render for IncidentsPanel {
                 Label::new("INCIDENTS")
                     .size(LabelSize::XSmall)
                     .color(Color::Muted),
+            )
+            .child(
+                Label::new("· Monitor")
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
             );
 
         let body: AnyElement = match self.status {
