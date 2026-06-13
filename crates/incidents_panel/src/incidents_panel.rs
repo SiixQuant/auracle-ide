@@ -5,10 +5,12 @@
 //! sentence, and the technical detail behind a "show details" toggle.
 //! The panel renders truth — it never invents an incident.
 //!
-//! v0 is read-only: dismissal needs a CSRF-free engine path for
-//! first-party clients (tracked as a ledger follow-up), so this run
-//! deliberately ships no Dismiss button rather than one that would be
-//! refused. Reading and triaging by plain cause is the whole v0 value.
+//! Each card has a Dismiss action ("mark as seen and hide it"). It
+//! posts to the engine's existing protected endpoint using CSRF
+//! double-submit — the panel captures the auracle_csrf token from the
+//! incidents GET and echoes it as both cookie and X-CSRF-Token — so
+//! it clears alerts the same way a browser does, with no weakened
+//! server CSRF and no new endpoint.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -179,7 +181,8 @@ fn cookie_from_headers(
     name: &str,
 ) -> Option<SharedString> {
     for value in headers.get_all(http_client::http::header::SET_COOKIE).iter() {
-        let raw = value.to_str().ok()?;
+        // Skip a non-UTF-8 header rather than abandoning the rest.
+        let Ok(raw) = value.to_str() else { continue };
         for part in raw.split(';') {
             let part = part.trim();
             if let Some(rest) = part.strip_prefix(name) {
