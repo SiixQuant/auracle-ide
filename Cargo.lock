@@ -1396,6 +1396,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_status"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auto_update"
 version = "0.1.0"
 dependencies = [
@@ -22859,6 +22873,7 @@ dependencies = [
  "assets",
  "audio",
  "auracle_connect",
+ "auracle_status",
  "auto_update",
  "auto_update_ui",
  "breadcrumbs",

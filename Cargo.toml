@@ -16,6 +16,7 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auracle_connect",
+    "crates/auracle_status",
     "crates/auto_update",
     "crates/auto_update_helper",
     "crates/auto_update_ui",
@@ -432,6 +433,7 @@ rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 auracle_connect = { path = "crates/auracle_connect" }
+auracle_status = { path = "crates/auracle_status" }
 runs_dock = { path = "crates/runs_dock" }
 runway_rail = { path = "crates/runway_rail" }
 skill_creator = { path = "crates/skill_creator" }
