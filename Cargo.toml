@@ -987,6 +987,11 @@ zed_actions = { codegen-units = 1 }
 
 [profile.release]
 debug = "limited"
+# Strip the symbol table from release binaries — it's ~90 MB of the
+# Mach-O on this workspace, so stripping shrinks the app and speeds
+# launch (less to map/page in). Trade-off: crash reports are no longer
+# symbolicated locally; remove this line if you need that back.
+strip = "symbols"
 lto = "thin"
 codegen-units = 1
 
