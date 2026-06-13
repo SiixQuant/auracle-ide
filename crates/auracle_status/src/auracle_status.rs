@@ -123,7 +123,7 @@ impl Render for AuracleStatus {
             EngineState::Checking => (
                 cx.theme().status().warning,
                 "engine: checking…".into(),
-                "Asking your engine how it's doing.".into(),
+                "Asking your engine how it's doing — usually a moment.".into(),
             ),
             EngineState::Unreachable => (
                 cx.theme().status().error,
@@ -143,8 +143,8 @@ impl Render for AuracleStatus {
                      license — paper stays the default."
                         .to_string()
                 } else {
-                    "Connected. Real-money trading is paused by your \
-                     license state; paper trading works."
+                    "Connected. Real-money trading is not yet enabled on \
+                     your license; paper trading works."
                         .to_string()
                 }),
             ),
