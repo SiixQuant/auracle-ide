@@ -60,10 +60,12 @@ struct Config {
 }
 
 fn read_config() -> Config {
+    let c = auracle_connect::load_config();
     Config {
-        base_url: std::env::var("AURACLE_ENGINE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:1969".to_string()),
-        api_key: std::env::var("AURACLE_API_KEY").ok(),
+        base_url: c
+            .engine_url
+            .unwrap_or_else(|| "http://127.0.0.1:1969".to_string()),
+        api_key: c.api_key.filter(|k| !k.trim().is_empty()),
     }
 }
 
@@ -87,6 +89,10 @@ impl RunsDock {
                 } else {
                     Status::Connecting
                 };
+                cx.observe_global::<auracle_connect::ConnectGeneration>(
+                    |this: &mut Self, cx| this.reconnect(cx),
+                )
+                .detach();
                 let mut this = Self {
                     focus_handle: cx.focus_handle(),
                     rows: VecDeque::new(),
@@ -135,6 +141,19 @@ impl RunsDock {
                 cx.background_executor().timer(backoff).await;
             }
         })
+    }
+
+    pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+        let config = read_config();
+        self.rows.clear();
+        if config.api_key.is_some() {
+            self.status = Status::Connecting;
+            self._stream = Some(Self::spawn_stream(config, cx));
+        } else {
+            self.status = Status::NotConfigured;
+            self._stream = None;
+        }
+        cx.notify();
     }
 
     fn push_event(&mut self, value: &serde_json::Value) {
@@ -313,46 +332,20 @@ impl Render for RunsDock {
         let body: AnyElement = match self.status {
             Status::NotConfigured => v_flex()
                 .p_3()
-                .gap_1()
+                .gap_2()
                 .child(Label::new(
                     "Not connected to your Auracle engine yet — normal on \
                      first start, nothing is broken.",
                 ))
                 .child(
-                    Label::new(
-                        "1. In your web browser, open \
-                         http://127.0.0.1:1969/ui/account and copy your \
-                         key. (If that address doesn't open, start your \
-                         engine with the Auracle Desktop app first.)",
-                    )
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-                )
-                .child(
-                    Label::new(
-                        "2. Open the Terminal app, type each line below and press \
-                         Enter after each (paste your key into the second):",
-                    )
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-                )
-                .child(
-                    Label::new(
-                        "export AURACLE_ENGINE_URL=\"http://127.0.0.1:1969\"",
-                    )
-                    .size(LabelSize::Small),
-                )
-                .child(
-                    Label::new("export AURACLE_API_KEY=\"your key here\"")
-                        .size(LabelSize::Small),
-                )
-                .child(
-                    Label::new(
-                        "3. In that same terminal, type  zed  and press Enter to \
-                         start Auracle IDE connected.",
-                    )
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                    Button::new("runs-connect", "Connect…")
+                        .style(ButtonStyle::Filled)
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(auracle_connect::Connect),
+                                cx,
+                            );
+                        }),
                 )
                 .into_any_element(),
             _ if self.rows.is_empty() => v_flex()

@@ -5467,6 +5467,7 @@ mod tests {
             project_panel::init(cx);
             runway_rail::init(cx);
             runs_dock::init(cx);
+            auracle_connect::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
             copilot_chat::init(

@@ -1380,6 +1380,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_connect"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "editor",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "paths",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auto_update"
 version = "0.1.0"
 dependencies = [
@@ -15462,6 +15478,7 @@ name = "runs_dock"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "auracle_connect",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -22841,6 +22858,7 @@ dependencies = [
  "askpass",
  "assets",
  "audio",
+ "auracle_connect",
  "auto_update",
  "auto_update_ui",
  "breadcrumbs",

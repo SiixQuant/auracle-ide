@@ -15,6 +15,7 @@ members = [
     "crates/askpass",
     "crates/assets",
     "crates/audio",
+    "crates/auracle_connect",
     "crates/auto_update",
     "crates/auto_update_helper",
     "crates/auto_update_ui",
@@ -430,6 +431,7 @@ reqwest_client = { path = "crates/reqwest_client" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", features = ["wav", "playback", "wav_output", "recording"] }
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
+auracle_connect = { path = "crates/auracle_connect" }
 runs_dock = { path = "crates/runs_dock" }
 runway_rail = { path = "crates/runway_rail" }
 skill_creator = { path = "crates/skill_creator" }
