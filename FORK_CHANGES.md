@@ -31,6 +31,21 @@ and are recorded here.
   scheduled for removal in the deep debrand pass); the dev-container
   suggestion toast no longer auto-prompts (CLI-initiated only);
   title-bar Sign In hidden by default; app_id is Auracle's.
+- 2026-06-13 (5) — deep debrand of user-facing surfaces: "About Zed"
+  → "About Auracle IDE"; launch-failure notifications, title-bar
+  update/collab prompts, and the screen-share permission text now say
+  "Auracle IDE"; AI-panel headline "Welcome to Zed AI" → "Welcome to
+  Auracle AI"; generic "tokens in Zed agent" → "tokens in the agent".
+  Packaged as /Applications/Auracle IDE.app (CFBundleName "Auracle
+  IDE", bundle id com.aurapointcapital.AuracleIDE, Auracle logo
+  icon) so the Dock, ⌘-Tab, and app menu read "Auracle IDE".
+  PRINCIPLED EXCLUSION: Zed's specific paid-plan screens (Zed Pro /
+  Business / Student and their token grants) are NOT relabeled to
+  "Auracle Pro/…" — Auracle does not resell those tiers and faking
+  them would violate the never-fake-capability rule. Those screens
+  belong to Zed's cloud sign-in, which is hidden by default and
+  therefore unreachable in normal Auracle use; they are left inert
+  rather than turned into false Auracle products.
 
 "Zed" remains a trademark of Zed Industries; this fork does not imply
 any endorsement by them. Remaining Zed marks in source and assets are
