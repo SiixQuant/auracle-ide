@@ -376,6 +376,11 @@ impl Render for ValidationRail {
                 Label::new("VALIDATION")
                     .size(LabelSize::XSmall)
                     .color(Color::Muted),
+            )
+            .child(
+                Label::new("· Validate")
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
             );
 
         let body: AnyElement = match self.conn {

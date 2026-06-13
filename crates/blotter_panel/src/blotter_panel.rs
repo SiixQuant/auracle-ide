@@ -302,13 +302,15 @@ impl Render for BlotterPanel {
                 .gap_0p5()
                 .children(self.orders.iter().map(|order| {
                     let dot = self.status_color(&order.status, cx);
+                    // Read-only record rows — no hover highlight (a row
+                    // isn't clickable; the highlight would imply an
+                    // action that doesn't exist).
                     h_flex()
                         .px_2()
                         .py_1()
                         .gap_2()
                         .items_start()
                         .rounded_sm()
-                        .hover(|s| s.bg(cx.theme().colors().ghost_element_hover))
                         .child(
                             div()
                                 .mt_1()
