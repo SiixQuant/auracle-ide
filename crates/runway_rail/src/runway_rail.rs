@@ -266,14 +266,17 @@ impl Render for RunwayRail {
                     .and_then(|t| t.current.as_ref())
                     .map(|c| c.as_ref() == *key)
                     .unwrap_or(false);
-                let tooltip_text: SharedString = if connected
-                    && !stage.evidence.is_empty()
-                {
+                let tooltip_text: SharedString = if !stage.evidence.is_empty() {
+                    // The engine's own sentence — for reached AND for
+                    // honestly-unproven stages (it carries the "not
+                    // tracked yet" wording).
                     stage.evidence.clone()
+                } else if connected {
+                    format!("{hint} Nothing here yet.").into()
                 } else {
                     format!(
-                        "{hint} Locked — this stage lights up when your \
-                         Auracle engine starts tracking the runway."
+                        "{hint} This stage lights up after you connect \
+                         your Auracle engine."
                     )
                     .into()
                 };
@@ -305,6 +308,14 @@ impl Render for RunwayRail {
                             .color(icon_color),
                     )
                     .child(Label::new(*name).color(label_color))
+                    .child(div().flex_1())
+                    .when(is_current, |row| {
+                        row.child(
+                            Label::new("now")
+                                .size(LabelSize::XSmall)
+                                .color(Color::Accent),
+                        )
+                    })
                     .tooltip(Tooltip::text(tooltip_text))
             }))
             .child(div().flex_1())
