@@ -293,6 +293,18 @@ impl Render for RunwayRail {
                 } else {
                     (IconName::LockOutlined, Color::Disabled, Color::Disabled)
                 };
+                // A one-word glance marker so lock states read without a
+                // hover: the current rung, a not-tracked-yet stage, and
+                // a not-done-yet stage are each distinct — none "broken".
+                let (marker, marker_color): (Option<&str>, Color) = if is_current {
+                    (Some("now"), Color::Accent)
+                } else if reached {
+                    (None, Color::Muted)
+                } else if stage.reached.as_ref() == "unknown" {
+                    (Some("soon"), Color::Muted)
+                } else {
+                    (Some("to do"), Color::Muted)
+                };
                 h_flex()
                     .id(ix)
                     .px_1()
@@ -309,11 +321,11 @@ impl Render for RunwayRail {
                     )
                     .child(Label::new(*name).color(label_color))
                     .child(div().flex_1())
-                    .when(is_current, |row| {
+                    .when_some(marker, |row, m| {
                         row.child(
-                            Label::new("now")
+                            Label::new(m)
                                 .size(LabelSize::XSmall)
-                                .color(Color::Accent),
+                                .color(marker_color),
                         )
                     })
                     .tooltip(Tooltip::text(tooltip_text))
