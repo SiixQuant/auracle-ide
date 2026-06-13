@@ -322,7 +322,8 @@ impl Render for RunsDock {
                     Label::new(
                         "1. In your web browser, open \
                          http://127.0.0.1:1969/ui/account and copy your \
-                         key.",
+                         key. (If that address doesn't open, start your \
+                         engine with the Auracle Desktop app first.)",
                     )
                     .size(LabelSize::Small)
                     .color(Color::Muted),
