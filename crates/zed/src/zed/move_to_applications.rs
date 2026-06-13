@@ -73,7 +73,7 @@ impl MoveToApplicationsRequest {
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                "Move Zed to Applications?",
+                "Move Auracle to Applications?",
                 Some(
                     "Auracle is running from a temporary location. Move it to Applications to finish installing it.",
                 ),
@@ -103,7 +103,7 @@ impl MoveToApplicationsRequest {
                         .ok();
                     cx.prompt(
                         PromptLevel::Critical,
-                        "Failed to move Zed to Applications",
+                        "Failed to move Auracle to Applications",
                         Some(&error.to_string()),
                         &["Ok"],
                     )

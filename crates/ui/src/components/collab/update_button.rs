@@ -79,19 +79,19 @@ impl UpdateButton {
     }
 
     pub fn checking() -> Self {
-        Self::new(IconName::LoadCircle, "Checking for Zed Updates…")
+        Self::new(IconName::LoadCircle, "Checking for Auracle Updates…")
             .icon_animate(true)
             .disabled(true)
     }
 
     pub fn downloading(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::Download, "Downloading Zed Update…")
+        Self::new(IconName::Download, "Downloading Auracle Update…")
             .tooltip(version)
             .disabled(true)
     }
 
     pub fn installing(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::LoadCircle, "Installing Zed Update…")
+        Self::new(IconName::LoadCircle, "Installing Auracle Update…")
             .icon_animate(true)
             .tooltip(version)
             .disabled(true)

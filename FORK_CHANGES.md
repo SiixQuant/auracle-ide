@@ -46,6 +46,22 @@ and are recorded here.
   belong to Zed's cloud sign-in, which is hidden by default and
   therefore unreachable in normal Auracle use; they are left inert
   rather than turned into false Auracle products.
+- 2026-06-13 (6) — debrand completion of the remaining user-facing
+  surfaces: the in-app logo (`assets/images/zed_logo.svg`, rendered on
+  the Welcome and onboarding screens) is now the Auracle flame mark;
+  the move-to-Applications dialog ("Move Auracle to Applications?" /
+  "Failed to move Auracle to Applications") and the title-bar update
+  button ("Checking for / Downloading / Installing Auracle Update…")
+  read Auracle. PRINCIPLED EXCLUSIONS (left intentionally, not
+  user-facing product chrome): test fixtures and component-gallery
+  examples; internal identifiers (e.g. the `InstallingZedModal` type,
+  `AgentId::from("Zed")`); bundled-asset names referenced by path
+  ("Zed Mono" font, "Zed Icons" icon theme); GPU/telemetry diagnostic
+  strings; and the Zed-cloud paid-plan/account screens covered by the
+  prior exclusion. The on-disk binary remains `zed` and the config /
+  cache directories remain Zed's — these are non-user-facing and
+  renaming them would fork the data dirs / break upstream-rebase
+  ergonomics for no customer-visible gain.
 
 "Zed" remains a trademark of Zed Industries; this fork does not imply
 any endorsement by them. Remaining Zed marks in source and assets are
