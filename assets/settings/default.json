@@ -1112,8 +1112,33 @@
     "single_file_review": false,
     // When enabled, show voting thumbs for feedback on agent edits.
     "enable_feedback": true,
-    "default_profile": "write",
+    "default_profile": "auracle",
     "profiles": {
+      "auracle": {
+        // Auracle fork: the novice-first quant profile. Turns the
+        // Auracle engine's MCP tools ON (backtest, schedules,
+        // securities, deploy-paper, …) and keeps a focused file-and-
+        // read built-in set, leaving heavier code-navigation, web
+        // search, terminal and sub-agents off so a first-time user's
+        // Agent Panel is the quant workflow, not a general IDE.
+        "name": "Auracle",
+        "enable_all_context_servers": true,
+        "tools": {
+          "read_file": true,
+          "edit_file": true,
+          "write_file": true,
+          "create_directory": true,
+          "find_path": true,
+          "list_directory": true,
+          "grep": true,
+          "diagnostics": true,
+          "fetch": true,
+          "create_thread": true,
+          "update_plan": true,
+          "update_title": true,
+          "list_agents_and_models": true,
+        },
+      },
       "write": {
         "name": "Write",
         "enable_all_context_servers": true,
