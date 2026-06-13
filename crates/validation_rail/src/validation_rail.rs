@@ -192,6 +192,19 @@ impl ValidationRail {
             _ => s.ignored, // unknown — couldn't be checked
         }
     }
+
+    /// A one-word tier marker so each row reads without relying on the
+    /// dot's color — and so an unknown row says "not checked" instead
+    /// of looking broken (the same glance-legibility law as the
+    /// runway rail).
+    fn tier_word(&self, tier: &str) -> (&'static str, Color) {
+        match tier {
+            "green" => ("ok", Color::Success),
+            "red" => ("needs attention", Color::Error),
+            "amber" | "warning" => ("caution", Color::Warning),
+            _ => ("not checked", Color::Muted),
+        }
+    }
 }
 
 enum ListResult {
@@ -528,7 +541,12 @@ impl ValidationRail {
                                     }
                                 }))
                                 .child(div().size_2().rounded_full().flex_none().bg(dot))
-                                .child(Label::new(sig.name.clone()).size(LabelSize::Small)),
+                                .child(Label::new(sig.name.clone()).size(LabelSize::Small))
+                                .child(div().flex_1())
+                                .child({
+                                    let (word, color) = self.tier_word(&sig.tier);
+                                    Label::new(word).size(LabelSize::XSmall).color(color)
+                                }),
                         )
                         .when(is_open, |row| {
                             row.child(
