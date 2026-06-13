@@ -1,11 +1,14 @@
 //! Status bar truths — the engine chip.
 //!
 //! One small status-bar item that tells the truth about the engine
-//! connection and the active broker, polled from the capability API
-//! every thirty seconds and refreshed instantly after a Connect
-//! save. It renders exactly three states — not connected, checking,
-//! and connected-with-broker — and a click opens the Connect dialog.
-//! The kill-switch chip is deliberately absent until its engine verb
+//! connection, the active broker, and what that broker is allowed to
+//! do ("live ok" vs "paper only"), polled from the capability API
+//! every thirty seconds and refreshed instantly after a Connect save.
+//! It renders four states — not connected, checking, unreachable, and
+//! connected-with-broker — and a click opens the Connect dialog. The
+//! tooltip carries the engine's full plain capability sentence so the
+//! honest answer to "can I go live?" is one hover away. The
+//! kill-switch chip is deliberately absent until its engine verb
 //! exists (never fake a control).
 
 use std::sync::Arc;
@@ -24,7 +27,14 @@ const POLL_EVERY: Duration = Duration::from_secs(30);
 enum EngineState {
     NotConnected,
     Checking,
-    Connected { broker: SharedString, live_allowed: bool },
+    Connected {
+        broker: SharedString,
+        live_allowed: bool,
+        /// The engine's plain capability sentence for the active
+        /// broker (or the "no broker yet" line) — the honest answer
+        /// to "what can this do / can I go live?".
+        capability_plain: SharedString,
+    },
     Unreachable,
 }
 
@@ -91,18 +101,30 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
         let value: serde_json::Value = serde_json::from_str(&body)?;
-        let broker = value
-            .get("active_broker")
-            .and_then(|v| v.as_str())
-            .unwrap_or("none yet")
-            .to_string();
+        let active = value.get("active_broker").and_then(|v| v.as_str());
+        let broker = active.unwrap_or("none yet").to_string();
         let live_allowed = value
             .get("live_allowed")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Prefer the active broker's own plain sentence; fall back to
+        // the top-level plain (set when no broker is active yet).
+        let capability_plain = value
+            .get("brokers")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                arr.iter().find(|b| {
+                    b.get("active").and_then(|a| a.as_bool()).unwrap_or(false)
+                })
+            })
+            .and_then(|b| b.get("plain").and_then(|p| p.as_str()))
+            .or_else(|| value.get("plain").and_then(|p| p.as_str()))
+            .unwrap_or("")
+            .to_string();
         Ok(EngineState::Connected {
             broker: SharedString::from(broker),
             live_allowed,
+            capability_plain: SharedString::from(capability_plain),
         })
     }
     .await;
@@ -135,19 +157,31 @@ impl Render for AuracleStatus {
             EngineState::Connected {
                 broker,
                 live_allowed,
-            } => (
-                cx.theme().status().success,
-                SharedString::from(format!("engine: live · broker: {broker}")),
-                SharedString::from(if *live_allowed {
-                    "Connected. Real-money trading is allowed by your \
-                     license — paper stays the default."
-                        .to_string()
+                capability_plain,
+            } => {
+                // Glance text answers "can I go live?" in one word;
+                // the tooltip carries the engine's full plain sentence.
+                let mode = if *live_allowed { "live ok" } else { "paper only" };
+                let license_note = if *live_allowed {
+                    "Real-money trading is allowed by your license — \
+                     paper stays the default."
                 } else {
-                    "Connected. Real-money trading is not yet enabled on \
-                     your license; paper trading works."
-                        .to_string()
-                }),
-            ),
+                    "Real-money trading is not yet enabled on your \
+                     license; paper trading works."
+                };
+                let tip = if capability_plain.is_empty() {
+                    license_note.to_string()
+                } else {
+                    format!("{capability_plain} {license_note}")
+                };
+                (
+                    cx.theme().status().success,
+                    SharedString::from(format!(
+                        "engine: live · broker: {broker} · {mode}"
+                    )),
+                    SharedString::from(tip),
+                )
+            }
         };
 
         h_flex()
