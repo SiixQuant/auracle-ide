@@ -106,6 +106,7 @@ members = [
     "crates/http_client_tls",
     "crates/icons",
     "crates/image_viewer",
+    "crates/blotter_panel",
     "crates/incidents_panel",
     "crates/input_latency_ui",
     "crates/inspector_ui",
@@ -435,6 +436,7 @@ rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_status = { path = "crates/auracle_status" }
+blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }
 runs_dock = { path = "crates/runs_dock" }
 runway_rail = { path = "crates/runway_rail" }

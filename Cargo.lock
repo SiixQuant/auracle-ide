@@ -2358,6 +2358,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "blotter_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "bmrng"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22894,6 +22908,7 @@ dependencies = [
  "auracle_status",
  "auto_update",
  "auto_update_ui",
+ "blotter_panel",
  "breadcrumbs",
  "call",
  "channel",
