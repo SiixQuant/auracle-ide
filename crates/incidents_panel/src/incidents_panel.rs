@@ -49,6 +49,8 @@ struct Incident {
     severity: SharedString,
     cause: SharedString,
     detail: SharedString,
+    dismiss_kind: SharedString,
+    dismiss_id: i64,
 }
 
 #[derive(Clone, PartialEq)]
@@ -63,6 +65,10 @@ pub struct IncidentsPanel {
     focus_handle: FocusHandle,
     incidents: Vec<Incident>,
     expanded: HashSet<SharedString>,
+    /// The CSRF token captured from the incidents GET response, so a
+    /// Dismiss POST can satisfy the engine's double-submit check
+    /// without weakening server-side CSRF for browsers.
+    csrf: Option<SharedString>,
     status: Status,
     _poll: Task<()>,
 }
@@ -87,6 +93,7 @@ impl IncidentsPanel {
                     focus_handle: cx.focus_handle(),
                     incidents: Vec::new(),
                     expanded: HashSet::new(),
+                    csrf: None,
                     status: if auracle_connect::load_config().api_key.is_some() {
                         Status::Loading
                     } else {
@@ -113,9 +120,12 @@ impl IncidentsPanel {
                             FetchResult::Unreachable => {
                                 this.status = Status::Unreachable;
                             }
-                            FetchResult::Ok(items) => {
+                            FetchResult::Ok(items, csrf) => {
                                 this.status = Status::Connected;
                                 this.incidents = items;
+                                if csrf.is_some() {
+                                    this.csrf = csrf;
+                                }
                             }
                         }
                         cx.notify();
@@ -137,12 +147,51 @@ impl IncidentsPanel {
             _ => status.info,
         }
     }
+
+    fn dismiss(&mut self, incident: &Incident, cx: &mut Context<Self>) {
+        let Some(csrf) = self.csrf.clone() else {
+            return; // no token yet — a poll will land one shortly
+        };
+        let row_id = incident.row_id.clone();
+        let kind = incident.dismiss_kind.clone();
+        let id = incident.dismiss_id;
+        // Optimistic: drop the card now; a failed POST is recovered by
+        // the next poll (the engine still reports it until dismissed).
+        self.incidents.retain(|i| i.row_id != row_id);
+        cx.notify();
+        let http = cx.http_client();
+        cx.spawn(async move |_this: WeakEntity<Self>, _cx| {
+            post_dismiss(http, csrf, kind, id).await.ok();
+        })
+        .detach();
+    }
 }
 
 enum FetchResult {
     NotConnected,
     Unreachable,
-    Ok(Vec<Incident>),
+    Ok(Vec<Incident>, Option<SharedString>),
+}
+
+/// Pull the value of a Set-Cookie named cookie out of response headers.
+fn cookie_from_headers(
+    headers: &http_client::http::HeaderMap,
+    name: &str,
+) -> Option<SharedString> {
+    for value in headers.get_all(http_client::http::header::SET_COOKIE).iter() {
+        let raw = value.to_str().ok()?;
+        for part in raw.split(';') {
+            let part = part.trim();
+            if let Some(rest) = part.strip_prefix(name) {
+                if let Some(v) = rest.strip_prefix('=') {
+                    if !v.is_empty() {
+                        return Some(SharedString::from(v.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
@@ -153,7 +202,7 @@ async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
     let url = config
         .engine_url
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let attempt: Result<Vec<Incident>> = async {
+    let attempt: Result<(Vec<Incident>, Option<SharedString>)> = async {
         let request = http_client::http::Request::builder()
             .uri(format!("{url}/ui/api/incidents"))
             .header("Cookie", format!("auracle_session={key}"))
@@ -162,6 +211,7 @@ async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
         if !response.status().is_success() {
             anyhow::bail!("status {}", response.status());
         }
+        let csrf = cookie_from_headers(response.headers(), "auracle_csrf");
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
         let value: serde_json::Value = serde_json::from_str(&body)?;
@@ -177,6 +227,16 @@ async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
                 if cause.is_empty() {
                     continue;
                 }
+                let dismiss = it.get("dismiss");
+                let dismiss_kind = dismiss
+                    .and_then(|d| d.get("kind"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(kind)
+                    .to_string();
+                let dismiss_id = dismiss
+                    .and_then(|d| d.get("id"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(id);
                 out.push(Incident {
                     row_id: SharedString::from(format!("{kind}:{id}")),
                     severity: SharedString::from(
@@ -192,16 +252,48 @@ async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
                             .unwrap_or_default()
                             .to_string(),
                     ),
+                    dismiss_kind: SharedString::from(dismiss_kind),
+                    dismiss_id,
                 });
             }
         }
-        Ok(out)
+        Ok((out, csrf))
     }
     .await;
     match attempt {
-        Ok(items) => FetchResult::Ok(items),
+        Ok((items, csrf)) => FetchResult::Ok(items, csrf),
         Err(_) => FetchResult::Unreachable,
     }
+}
+
+async fn post_dismiss(
+    http: Arc<dyn http_client::HttpClient>,
+    csrf: SharedString,
+    kind: SharedString,
+    id: i64,
+) -> Result<()> {
+    let config = auracle_connect::load_config();
+    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+        anyhow::bail!("not connected");
+    };
+    let url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let body = serde_json::to_string(&serde_json::json!({"kind": kind, "id": id}))?;
+    // Double-submit CSRF: the token rides as both the auracle_csrf
+    // cookie and the X-CSRF-Token header (engine compares the two).
+    let request = http_client::http::Request::builder()
+        .method(http_client::http::Method::POST)
+        .uri(format!("{url}/ui/api/alerts/dismiss"))
+        .header("Cookie", format!("auracle_session={key}; auracle_csrf={csrf}"))
+        .header("X-CSRF-Token", csrf.to_string())
+        .header("Content-Type", "application/json")
+        .body(http_client::AsyncBody::from(body))?;
+    let response = http.send(request).await?;
+    if !response.status().is_success() {
+        anyhow::bail!("status {}", response.status());
+    }
+    Ok(())
 }
 
 impl EventEmitter<PanelEvent> for IncidentsPanel {}
@@ -321,6 +413,8 @@ impl Render for IncidentsPanel {
                     let is_open = self.expanded.contains(&incident.row_id);
                     let row_id = incident.row_id.clone();
                     let has_detail = !incident.detail.is_empty();
+                    let can_dismiss = self.csrf.is_some();
+                    let incident_for_dismiss = incident.clone();
                     v_flex()
                         .p_2()
                         .gap_1()
@@ -343,7 +437,31 @@ impl Render for IncidentsPanel {
                                 .child(
                                     Label::new(incident.cause.clone())
                                         .size(LabelSize::Small),
-                                ),
+                                )
+                                .child(div().flex_1())
+                                .when(can_dismiss, |row| {
+                                    row.child(
+                                        Button::new(
+                                            SharedString::from(format!(
+                                                "dismiss-{row_id}"
+                                            )),
+                                            "Dismiss",
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .label_size(LabelSize::XSmall)
+                                        .tooltip(ui::Tooltip::text(
+                                            "Mark as seen and hide it.",
+                                        ))
+                                        .on_click(cx.listener(
+                                            move |this, _, _, cx| {
+                                                this.dismiss(
+                                                    &incident_for_dismiss,
+                                                    cx,
+                                                );
+                                            },
+                                        )),
+                                    )
+                                }),
                         )
                         .when(has_detail, |card| {
                             let toggle_id: SharedString =
