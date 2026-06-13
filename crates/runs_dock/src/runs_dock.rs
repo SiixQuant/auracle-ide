@@ -315,12 +315,22 @@ impl Render for RunsDock {
                 .p_3()
                 .gap_1()
                 .child(Label::new(
-                    "Not connected to your Auracle engine yet.",
+                    "Not connected to your Auracle engine yet — normal on \
+                     first start, nothing is broken.",
                 ))
                 .child(
                     Label::new(
-                        "Open a terminal and run these two lines, then start \
-                         Auracle IDE from that same terminal:",
+                        "1. In your web browser, open \
+                         http://127.0.0.1:1969/ui/account and copy your \
+                         key.",
+                    )
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+                )
+                .child(
+                    Label::new(
+                        "2. Open the Terminal app and run these two lines, \
+                         pasting your key into the second:",
                     )
                     .size(LabelSize::Small)
                     .color(Color::Muted),
@@ -332,11 +342,15 @@ impl Render for RunsDock {
                     .size(LabelSize::Small),
                 )
                 .child(
+                    Label::new("export AURACLE_API_KEY=\"your key here\"")
+                        .size(LabelSize::Small),
+                )
+                .child(
                     Label::new(
-                        "export AURACLE_API_KEY=\"…\"  (copy your key from \
-                         the Account page)",
+                        "3. In that same terminal, start Auracle IDE again.",
                     )
-                    .size(LabelSize::Small),
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
                 )
                 .into_any_element(),
             _ if self.rows.is_empty() => v_flex()
