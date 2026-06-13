@@ -15458,6 +15458,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8388ea1a9e0ea807e442e8263a699e7edcb320ecbcd21b4fa8ff859acce3ba"
 
 [[package]]
+name = "runs_dock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "runtimelib"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22927,6 +22940,7 @@ dependencies = [
  "repl",
  "reqwest_client",
  "rope",
+ "runs_dock",
  "runway_rail",
  "search",
  "semver",

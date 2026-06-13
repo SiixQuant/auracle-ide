@@ -1,0 +1,22 @@
+[package]
+name = "runs_dock"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/runs_dock.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+gpui.workspace = true
+http_client.workspace = true
+serde_json.workspace = true
+ui.workspace = true
+workspace.workspace = true
