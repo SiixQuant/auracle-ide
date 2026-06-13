@@ -170,6 +170,7 @@ project.workspace = true
 project_panel.workspace = true
 auracle_connect.workspace = true
 auracle_status.workspace = true
+incidents_panel.workspace = true
 runs_dock.workspace = true
 runway_rail.workspace = true
 project_symbols.workspace = true

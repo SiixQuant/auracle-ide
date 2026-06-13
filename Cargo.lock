@@ -8935,6 +8935,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 
 [[package]]
+name = "incidents_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22931,6 +22945,7 @@ dependencies = [
  "http_client",
  "image",
  "image_viewer",
+ "incidents_panel",
  "input_latency_ui",
  "inspector_ui",
  "install_cli",
