@@ -176,8 +176,10 @@ impl Render for AuracleStatus {
                 };
                 (
                     cx.theme().status().success,
+                    // "on" (not "live") so the word never collides with
+                    // live trading — the mode token owns that meaning.
                     SharedString::from(format!(
-                        "engine: live · broker: {broker} · {mode}"
+                        "engine: on · broker: {broker} · {mode}"
                     )),
                     SharedString::from(tip),
                 )
