@@ -330,8 +330,8 @@ impl Render for RunsDock {
                 )
                 .child(
                     Label::new(
-                        "2. Open the Terminal app and run these two lines, \
-                         pasting your key into the second:",
+                        "2. Open the Terminal app, type each line below and press \
+                         Enter after each (paste your key into the second):",
                     )
                     .size(LabelSize::Small)
                     .color(Color::Muted),
@@ -348,7 +348,8 @@ impl Render for RunsDock {
                 )
                 .child(
                     Label::new(
-                        "3. In that same terminal, start Auracle IDE again.",
+                        "3. In that same terminal, type  zed  and press Enter to \
+                         start Auracle IDE connected.",
                     )
                     .size(LabelSize::Small)
                     .color(Color::Muted),
