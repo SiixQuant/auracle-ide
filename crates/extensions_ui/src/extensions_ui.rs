@@ -1652,12 +1652,36 @@ impl Render for ExtensionsPage {
                             .justify_between()
                             .child(Headline::new("Extensions").size(HeadlineSize::Large))
                             .child(
-                                Button::new("install-dev-extension", "Install Dev Extension")
-                                    .style(ButtonStyle::Outlined)
-                                    .size(ButtonSize::Medium)
-                                    .on_click(|_event, window, cx| {
-                                        window.dispatch_action(Box::new(InstallDevExtension), cx)
-                                    }),
+                                h_flex()
+                                    .gap_1p5()
+                                    .child(
+                                        // Auracle fork: updates are
+                                        // user-initiated only; this is
+                                        // the bulk path.
+                                        Button::new(
+                                            "check-extension-updates",
+                                            "Check for Updates",
+                                        )
+                                        .style(ButtonStyle::Outlined)
+                                        .size(ButtonSize::Medium)
+                                        .on_click(|_event, _window, cx| {
+                                            ExtensionStore::global(cx).update(
+                                                cx,
+                                                |store, cx| store.check_for_updates(cx),
+                                            );
+                                        }),
+                                    )
+                                    .child(
+                                        Button::new("install-dev-extension", "Install Dev Extension")
+                                            .style(ButtonStyle::Outlined)
+                                            .size(ButtonSize::Medium)
+                                            .on_click(|_event, window, cx| {
+                                                window.dispatch_action(
+                                                    Box::new(InstallDevExtension),
+                                                    cx,
+                                                )
+                                            }),
+                                    ),
                             ),
                     )
                     .child(
