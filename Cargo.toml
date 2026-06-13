@@ -175,6 +175,7 @@ members = [
     "crates/rpc",
     "crates/runs_dock",
     "crates/runway_rail",
+    "crates/validation_rail",
     "crates/sandbox",
     "crates/skill_creator",
     "crates/scheduler",
@@ -440,6 +441,7 @@ blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }
 runs_dock = { path = "crates/runs_dock" }
 runway_rail = { path = "crates/runway_rail" }
+validation_rail = { path = "crates/validation_rail" }
 skill_creator = { path = "crates/skill_creator" }
 scheduler = { path = "crates/scheduler" }
 sandbox = { path = "crates/sandbox" }

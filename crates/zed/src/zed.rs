@@ -730,6 +730,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let runs_dock = runs_dock::RunsDock::load(workspace_handle.clone(), cx.clone());
         let incidents_panel = incidents_panel::IncidentsPanel::load(workspace_handle.clone(), cx.clone());
         let blotter_panel = blotter_panel::BlotterPanel::load(workspace_handle.clone(), cx.clone());
+        let validation_rail = validation_rail::ValidationRail::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
@@ -758,6 +759,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(runs_dock, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(incidents_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(blotter_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(validation_rail, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
@@ -5474,6 +5476,7 @@ mod tests {
             runs_dock::init(cx);
             incidents_panel::init(cx);
             blotter_panel::init(cx);
+            validation_rail::init(cx);
             auracle_connect::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);

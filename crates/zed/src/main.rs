@@ -743,6 +743,7 @@ fn main() {
         runs_dock::init(cx);
         incidents_panel::init(cx);
         blotter_panel::init(cx);
+        validation_rail::init(cx);
         auracle_connect::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);

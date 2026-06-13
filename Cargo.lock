@@ -19899,6 +19899,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "validation_rail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23047,6 +23061,7 @@ dependencies = [
  "urlencoding",
  "util",
  "uuid",
+ "validation_rail",
  "vim",
  "vim_mode_setting",
  "watch",
