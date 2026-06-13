@@ -244,8 +244,8 @@ impl Render for ConnectModal {
                     .gap_1()
                     .child(
                         Label::new(
-                            "Your key — copy it from the Account page in \
-                             your browser (the engine address + /ui/account)",
+                            "Your key — open http://127.0.0.1:1969/ui/account \
+                             in your browser and copy the key shown there",
                         )
                         .size(LabelSize::Small)
                         .color(Color::Muted),
