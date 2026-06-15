@@ -176,8 +176,15 @@ async fn test_connection(
         .clone()
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
     let key = input.api_key.clone().unwrap_or_default();
+    // Hit the engine's purpose-built IDE connect-check endpoint, which
+    // reports not just engine+key health but also whether the AI agent
+    // (MCP) leg is reachable. Send the key via the proper `X-API-Key`
+    // header, and also as the `auracle_session` cookie so this still
+    // works against an older engine that only honors the cookie — both
+    // headers carry the same key.
     let request = http_client::http::Request::builder()
-        .uri(format!("{url}/ui/api/capabilities"))
+        .uri(format!("{url}/ui/api/ide/connect-check"))
+        .header("X-API-Key", key.clone())
         .header("Cookie", format!("auracle_session={key}"))
         .body(http_client::AsyncBody::default())?;
     let mut response = http.send(request).await?;
@@ -190,14 +197,47 @@ async fn test_connection(
     let mut body = String::new();
     response.body_mut().read_to_string(&mut body).await?;
     let value: serde_json::Value = serde_json::from_str(&body)?;
+    // Read defensively: against an unexpected engine any field may be
+    // absent, so fall back rather than unwrap.
+    let version = value
+        .get("engine")
+        .and_then(|engine| engine.get("version"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
     let active = value
         .get("active_broker")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .unwrap_or("none yet");
-    Ok(format!(
-        "Connected. Your engine is up and your key works \
-         (active broker: {active}). Press Save."
-    ))
+    let agent_reachable = value
+        .get("agent")
+        .and_then(|agent| agent.get("reachable"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let agent_detail = value
+        .get("agent")
+        .and_then(|agent| agent.get("detail"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    // Surface BOTH legs honestly: the engine+key verdict and a separate
+    // line of truth about the AI agent, so an unreachable agent never
+    // reads as a fully-ready setup.
+    let mut verdict = format!(
+        "Connected — engine v{version} is up and your key works \
+         (active broker: {active})."
+    );
+    if agent_reachable {
+        verdict.push_str(" Your AI agent is reachable.");
+    } else {
+        let detail = if agent_detail.is_empty() {
+            "the engine couldn't reach the MCP agent server"
+        } else {
+            agent_detail
+        };
+        verdict.push_str(&format!(
+            " Note: the AI agent isn't reachable yet ({detail})."
+        ));
+    }
+    Ok(verdict)
 }
 
 impl EventEmitter<DismissEvent> for ConnectModal {}
