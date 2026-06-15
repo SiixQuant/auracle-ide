@@ -94,17 +94,14 @@ pub fn init(cx: &mut App) {
     }
     let http = cx.http_client();
     cx.spawn(async move |cx| {
-        match test_connection(http, &config).await {
-            Ok(_) => {
-                cx.update(|cx| {
-                    let generation = cx.global::<ConnectGeneration>().0 + 1;
-                    cx.set_global(ConnectGeneration(generation));
-                })
-                .ok();
-            }
-            Err(error) => {
-                log::info!("auracle: startup auto-connect skipped: {error}");
-            }
+        // Best-effort: a missing key or unreachable engine on startup is
+        // expected (the user resolves it via the Connect modal), so only act
+        // on a successful verify and otherwise leave the IDE disconnected.
+        if test_connection(http, &config).await.is_ok() {
+            cx.update(|cx| {
+                let generation = cx.global::<ConnectGeneration>().0 + 1;
+                cx.set_global(ConnectGeneration(generation));
+            });
         }
     })
     .detach();
