@@ -148,34 +148,10 @@ impl ZedAiOnboarding {
     }
 
     fn render_sign_in_disclaimer(&self, _cx: &mut App) -> AnyElement {
-        let signing_in = matches!(self.sign_in_status, SignInStatus::SigningIn);
-
-        v_flex()
-            .w_full()
-            .relative()
-            .gap_1()
-            .child(Headline::new("Welcome to Auracle AI"))
-            .child(
-                Label::new("Sign in to try Zed Pro free for 14 days.")
-                    .color(Color::Muted)
-                    .mb_2(),
-            )
-            .child(PlanDefinitions.sign_in_upsell())
-            .child(
-                Button::new("sign_in", "Try Zed Pro for Free")
-                    .disabled(signing_in)
-                    .full_width()
-                    .style(ButtonStyle::Tinted(ui::TintColor::Accent))
-                    .on_click({
-                        let callback = self.sign_in.clone();
-                        move |_, window, cx| {
-                            telemetry::event!("Start Trial Clicked", state = "pre-sign-in");
-                            callback(window, cx)
-                        }
-                    }),
-            )
-            .children(self.render_dismiss_button())
-            .into_any_element()
+        // Auracle uses the operator's own AI model keys (Settings -> AI), not
+        // Zed's hosted models or Zed Pro billing, so the Zed-cloud sign-in /
+        // "Try Zed Pro for Free" trial upsell is intentionally not shown.
+        gpui::Empty.into_any_element()
     }
 
     fn render_free_plan_state(&self, cx: &mut App) -> AnyElement {
