@@ -80,6 +80,34 @@ pub fn init(cx: &mut App) {
         });
     })
     .detach();
+
+    // Auto-connect on startup. Without this the IDE only ever connects when
+    // the user re-opens the Connect modal and saves, so a saved connection
+    // never takes effect on launch. If a saved key exists, verify it in the
+    // background and, on success, bump ConnectGeneration so live panels
+    // connect just as a manual save would. A missing key or an unreachable
+    // engine is intentionally silent here — the user resolves it via the
+    // Connect modal — so launch never blocks or spams an error.
+    let config = load_config();
+    if config.api_key.as_deref().unwrap_or_default().is_empty() {
+        return;
+    }
+    let http = cx.http_client();
+    cx.spawn(async move |cx| {
+        match test_connection(http, &config).await {
+            Ok(_) => {
+                cx.update(|cx| {
+                    let generation = cx.global::<ConnectGeneration>().0 + 1;
+                    cx.set_global(ConnectGeneration(generation));
+                })
+                .ok();
+            }
+            Err(error) => {
+                log::info!("auracle: startup auto-connect skipped: {error}");
+            }
+        }
+    })
+    .detach();
 }
 
 enum TestState {
