@@ -305,12 +305,17 @@ osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["zed"]
 
 [package.metadata.bundle-stable]
+# Debranded to Auracle. The launcher (auracle-desktop view.rs) launches the
+# IDE by path "/Applications/Auracle IDE.app", so the bundle name MUST be
+# "Auracle IDE" for the launcher->IDE auto-connect handoff to work.
+# NOTE: app-icon.png is still upstream Zed's artwork — replace with an Auracle
+# logo asset to finish the visual debrand.
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
-identifier = "dev.zed.Zed"
-name = "Zed"
+identifier = "com.aurapointcapital.auracle-ide"
+name = "Auracle IDE"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["auracle"]
 
 [package.metadata.cargo-machete]
 ignored = ["profiling", "zstd", "tracing"]
