@@ -1,0 +1,34 @@
+# One-minute diagnostic: list the Xcode/SDK inventory on the macos-14 runner
+# so the real build can pin a webrtc-sys-compatible SDK (<= 14.2) without
+# gambling a 40-minute compile on a guessed version. Safe to delete once the
+# build workflow is green.
+name: mac Xcode probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ide-startup-autoconnect]
+    paths:
+      - ".github/workflows/mac-xcode-probe.yml"
+
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: List Xcodes and SDK versions
+        run: |
+          echo "=== installed Xcodes ==="
+          ls -d /Applications/Xcode*.app || true
+          echo ""
+          echo "=== SDK version per Xcode ==="
+          for app in /Applications/Xcode*.app; do
+            ver=$(/usr/bin/defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?")
+            sdk=$(DEVELOPER_DIR="$app/Contents/Developer" xcrun --show-sdk-version 2>/dev/null || echo "?")
+            metal=$(DEVELOPER_DIR="$app/Contents/Developer" xcrun -f metal 2>/dev/null && echo yes || echo no)
+            echo "$app  xcode=$ver  sdk=$sdk  metal=$metal"
+          done
+          echo ""
+          echo "=== default selection ==="
+          echo "xcode-select -p: $(xcode-select -p)"
+          echo "default sdk: $(xcrun --show-sdk-version)"

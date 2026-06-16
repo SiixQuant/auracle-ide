@@ -12,13 +12,11 @@
 # for internal builds).
 name: Build Auracle IDE (macOS)
 
+# Manual trigger only — Mac CI minutes are expensive, so we dispatch this
+# deliberately (gh workflow run / the Actions "Run workflow" button) rather
+# than on every push.
 on:
   workflow_dispatch:
-  push:
-    branches: [ide-startup-autoconnect]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
 
 jobs:
   bundle_mac_aarch64:
@@ -35,6 +33,26 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
+      # Zed's vendored webrtc-sys C++ bridge (cxx) does not compile against the
+      # stricter libc++ in macOS SDK 14.4+ (Xcode 15.3/15.4). Pin the newest
+      # Xcode whose SDK is <= 14.2 (Xcode <= 15.2), where it builds cleanly.
+      # Metal ships with every Xcode, so the shader compile is unaffected.
+      - name: Select an Xcode with SDK <= 14.2 (webrtc-sys/cxx)
+        run: |
+          echo "Available Xcodes:"; ls -d /Applications/Xcode*.app || true
+          best=""
+          for app in /Applications/Xcode_15.2*.app /Applications/Xcode_15.1*.app \
+                     /Applications/Xcode_15.0*.app /Applications/Xcode_14*.app; do
+            if [ -d "$app" ]; then best="$app"; break; fi
+          done
+          if [ -n "$best" ]; then
+            sudo xcode-select -s "$best/Contents/Developer"
+            echo "Selected $best"
+          else
+            echo "WARNING: no Xcode <= 15.2 found; using default $(xcode-select -p)"
+          fi
+          echo "SDK: $(xcrun --show-sdk-version)"
+          xcrun -f metal && echo "metal OK"
       - name: Bundle macOS app (aarch64, unsigned)
         run: ./script/bundle-mac aarch64-apple-darwin
       - name: Upload .dmg artifact
