@@ -1,0 +1,45 @@
+# Lean macOS build for the Auracle IDE fork.
+#
+# The upstream run_bundling.yml builds Linux + macOS + Windows on custom
+# Namespace/self-hosted runners that don't exist on this fork. This workflow
+# builds ONLY the macOS (Apple Silicon) .dmg on a GitHub-hosted macos-14
+# runner (which ships full Xcode, so the Metal shader compiler is present).
+#
+# No signing/notarization secrets are configured here, so script/bundle-mac
+# degrades to an ad-hoc-signed (unsigned) .dmg automatically. First launch:
+# right-click the app > Open to clear Gatekeeper. A signed/notarized public
+# build needs an Apple Developer cert + notarization secrets (not required
+# for internal builds).
+name: Build Auracle IDE (macOS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ide-startup-autoconnect]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+jobs:
+  bundle_mac_aarch64:
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          clean: false
+      - name: Setup Node (dmg-license needs it)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+      - name: Bundle macOS app (aarch64, unsigned)
+        run: ./script/bundle-mac aarch64-apple-darwin
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Auracle-IDE-aarch64-dmg
+          path: target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+          if-no-files-found: error
