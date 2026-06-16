@@ -994,6 +994,13 @@ debug = "limited"
 strip = "symbols"
 lto = "thin"
 codegen-units = 1
+# Shrink __text under the macOS linker's +/-128MB branch range (the zed bin
+# overran it -> "ld: B/BL out of range"). panic="abort" drops the eh_frame/
+# unwind tables (also clears the >16MB __eh_frame warning); opt-level="z"
+# optimizes for size. No production code relies on catch_unwind, so
+# abort-on-panic is safe for the bundle.
+panic = "abort"
+opt-level = "z"
 
 # The zed binary builds at codegen-units = 1 (inherited) for full
 # cross-function optimization + dead-code elimination. The previous

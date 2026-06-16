@@ -46,6 +46,23 @@ jobs:
         with:
           key: auracle-ide-mac-aarch64
           cache-on-failure: "true"
+      # Newer ld-prime (Xcode 16) does better branch-island insertion for
+      # >128MB binaries — a linker-level safety net if the shrunk binary still
+      # lands slightly over. Free now that webrtc is fixed at source (any Xcode
+      # links cleanly C++-wise). Falls back to the newest Xcode 16 present.
+      - name: Select Xcode 16 for large-binary linking headroom
+        run: |
+          best=""
+          for app in /Applications/Xcode_16.2*.app /Applications/Xcode_16.1*.app /Applications/Xcode_16*.app; do
+            if [ -d "$app" ]; then best="$app"; break; fi
+          done
+          if [ -n "$best" ]; then
+            sudo xcode-select -s "$best/Contents/Developer"
+            echo "Selected $best"
+          else
+            echo "No Xcode 16 found; using default $(xcode-select -p)"
+          fi
+          echo "SDK: $(xcrun --show-sdk-version)"; xcrun -f metal && echo "metal OK"
       - name: Bundle macOS app (aarch64, unsigned)
         run: ./script/bundle-mac aarch64-apple-darwin
       - name: Upload .dmg artifact
