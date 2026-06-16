@@ -995,8 +995,12 @@ strip = "symbols"
 lto = "thin"
 codegen-units = 1
 
+# The zed binary builds at codegen-units = 1 (inherited) for full
+# cross-function optimization + dead-code elimination. The previous
+# codegen-units = 16 build-speed shortcut bloated __text past the macOS
+# linker's +/-128MB branch range (ld: B/BL out of range at bundle time).
 [profile.release.package]
-zed = { codegen-units = 16 }
+zed = { codegen-units = 1 }
 
 [profile.release-fast]
 inherits = "release"

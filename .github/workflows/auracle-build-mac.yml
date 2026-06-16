@@ -26,13 +26,9 @@ jobs:
     timeout-minutes: 180
     env:
       CARGO_INCREMENTAL: 0
-      # webrtc-sys hardcodes -std=c++20, which trips a C++20-only static_assert
-      # in rust/cxx.h under the modern libc++ in every GitHub-hosted Xcode
-      # (15.0-16.2). cc-rs appends CXXFLAGS after the crate's own flags, so this
-      # makes the trailing -std win and drops the C++ standard to c++17, skipping
-      # the assert. webrtc-sys has no C++20-only source, so behavior is unchanged.
-      # Verified locally: webrtc-sys compiles clean under c++17 with strict libc++.
-      CXXFLAGS: "-std=c++17"
+      # NOTE: the webrtc-sys C++20-vs-libc++ break is fixed at the SOURCE in the
+      # SiixQuant/livekit-rust-sdks fork (build.rs -> -std=c++17), wired via the
+      # [patch.crates-io] entries in Cargo.toml. No CXXFLAGS override is needed.
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -42,6 +38,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
+      # Cache the cargo registry/git + compiled dependencies (webrtc-sys, the
+      # huge dep tree) so re-runs skip ~most of the cold compile. First run
+      # populates the cache; subsequent runs are dramatically faster/cheaper.
+      - name: Cache Rust deps
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: auracle-ide-mac-aarch64
+          cache-on-failure: "true"
       - name: Bundle macOS app (aarch64, unsigned)
         run: ./script/bundle-mac aarch64-apple-darwin
       - name: Upload .dmg artifact
