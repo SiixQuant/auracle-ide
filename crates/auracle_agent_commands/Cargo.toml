@@ -1,0 +1,19 @@
+[package]
+name = "auracle_agent_commands"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/auracle_agent_commands.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+agent_ui.workspace = true
+gpui.workspace = true
+ui.workspace = true
+workspace.workspace = true

@@ -1380,6 +1380,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_agent_commands"
+version = "0.1.0"
+dependencies = [
+ "agent_ui",
+ "gpui",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_connect"
 version = "0.1.0"
 dependencies = [
@@ -22947,6 +22957,7 @@ dependencies = [
  "askpass",
  "assets",
  "audio",
+ "auracle_agent_commands",
  "auracle_connect",
  "auracle_status",
  "auto_update",

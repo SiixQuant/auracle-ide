@@ -168,6 +168,7 @@ picker.workspace = true
 profiling.workspace = true
 project.workspace = true
 project_panel.workspace = true
+auracle_agent_commands.workspace = true
 auracle_connect.workspace = true
 auracle_status.workspace = true
 blotter_panel.workspace = true
