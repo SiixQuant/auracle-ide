@@ -32,7 +32,7 @@ pub struct OpenRecentProject {
 actions!(
     zed,
     [
-        /// Show the Zed welcome screen
+        /// Show the Auracle welcome screen
         ShowWelcome
     ]
 );

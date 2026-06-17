@@ -61,7 +61,7 @@ actions!(
         OpenServerSettings,
         /// Quits the application.
         Quit,
-        /// Shows information about Zed.
+        /// Shows information about Auracle.
         About,
         /// Opens the documentation website.
         OpenDocs,
