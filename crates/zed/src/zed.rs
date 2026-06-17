@@ -5483,6 +5483,7 @@ mod tests {
             validation_rail::init(cx);
             strategies_panel::init(cx);
             schedules_panel::init(cx);
+            auracle_agent_commands::init(cx);
             auracle_connect::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
