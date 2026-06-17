@@ -9234,9 +9234,9 @@ pub struct OpenChannelNotesById {
 actions!(
     zed,
     [
-        /// Opens the Zed log file.
+        /// Opens the Auracle log file.
         OpenLog,
-        /// Reveals the Zed log file in the system file manager.
+        /// Reveals the Auracle log file in the system file manager.
         RevealLogInFileManager
     ]
 );

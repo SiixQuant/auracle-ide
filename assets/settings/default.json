@@ -515,8 +515,10 @@
     "show_onboarding_banner": true,
     // Whether to show user picture in the titlebar.
     "show_user_picture": true,
-    // Whether to show the user menu in the titlebar.
-    "show_user_menu": true,
+    // Whether to show the user menu in the titlebar. Auracle white-label:
+    // off — the Zed account/avatar dropdown opens zed.dev, which Auracle
+    // does not use (Auracle connects to its own engine, not a Zed account).
+    "show_user_menu": false,
     // Whether to show the sign in button in the titlebar.
     "show_sign_in": false,
     // Whether to show the menus in the titlebar.
@@ -2586,9 +2588,12 @@
     // Delay in milliseconds before showing the which-key popup.
     "delay_ms": 1000,
   },
-  // The server to connect to. If the environment variable
-  // ZED_SERVER_URL is set, it will override this setting.
-  "server_url": "https://zed.dev",
+  // The cloud server to connect to. Auracle white-label: pointed away from
+  // zed.dev so the account / trial / upgrade / telemetry calls (all derived
+  // from this via zed_urls::*) do NOT phone home to Zed. Auracle has no
+  // cloud account backend — the IDE connects to the local Auracle engine via
+  // auracle_connect, not this. Point at a real Auracle cloud URL if one ships.
+  "server_url": "https://ide.aurapointcapital.com",
   // Settings overrides to use when using Zed Preview.
   // Mostly useful for developers who are managing multiple instances of Zed.
   "preview": {

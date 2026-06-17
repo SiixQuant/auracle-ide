@@ -104,7 +104,7 @@ use zed_actions::{
 };
 
 const DOCS_URL: &str = "https://zed.dev/docs/";
-const STATUS_URL: &str = "https://status.zed.dev";
+const STATUS_URL: &str = "https://github.com/SiixQuant/Auracle";
 
 pub struct CrashHandler(pub Arc<crashes::Client>);
 
@@ -736,8 +736,11 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
-        let channels_panel =
-            collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
+        // Auracle white-label: the collaboration panel is NOT added. It signs
+        // in to Zed's account/collab servers (zed.dev / collab.zed.dev) and
+        // lists Zed's community channels — irrelevant to Auracle, which has no
+        // collab backend. collab_ui::init() still runs (harmless global subs),
+        // so the crate stays compiled; the panel is just never shown.
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -767,7 +770,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
         );
@@ -1154,14 +1156,9 @@ fn register_actions(
                 workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
             },
         )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
-            },
-        )
+        // Auracle white-label: no CollabPanel ToggleFocus — the collab panel
+        // is never added (Zed account/collab is hidden), so there is nothing
+        // to toggle. collab_ui still compiles; the command is just not bound.
         .register_action(
             |workspace: &mut Workspace,
              _: &terminal_panel::ToggleFocus,
