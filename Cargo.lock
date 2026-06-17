@@ -15938,6 +15938,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "schedules_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "schema_generator"
 version = "0.1.0"
 dependencies = [
@@ -17477,6 +17491,20 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strategies_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
 
 [[package]]
 name = "streaming-iterator"
@@ -23024,6 +23052,7 @@ dependencies = [
  "rope",
  "runs_dock",
  "runway_rail",
+ "schedules_panel",
  "search",
  "semver",
  "serde",
@@ -23037,6 +23066,7 @@ dependencies = [
  "smol",
  "snippet_provider",
  "snippets_ui",
+ "strategies_panel",
  "svg_preview",
  "sysinfo 0.37.2",
  "system_specs",
