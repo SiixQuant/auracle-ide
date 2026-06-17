@@ -14,6 +14,7 @@ doctest = false
 
 [dependencies]
 anyhow.workspace = true
+auracle_agent_commands.workspace = true
 auracle_connect.workspace = true
 futures.workspace = true
 http_client.workspace = true
