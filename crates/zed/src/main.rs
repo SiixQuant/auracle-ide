@@ -1056,6 +1056,65 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
+            OpenRequestKind::AuraclePanel { name } => {
+                cx.spawn(async move |cx| {
+                    let multi_workspace =
+                        workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?;
+
+                    let panels_task = multi_workspace.update(cx, |multi_workspace, _, cx| {
+                        multi_workspace
+                            .workspace()
+                            .update(cx, |workspace, _| workspace.take_panels_task())
+                    })?;
+                    if let Some(task) = panels_task {
+                        task.await.log_err();
+                    }
+
+                    multi_workspace.update(cx, |multi_workspace, window, cx| {
+                        multi_workspace.workspace().update(cx, |workspace, cx| {
+                            match name.as_str() {
+                                "blotter" => {
+                                    workspace.focus_panel::<blotter_panel::BlotterPanel>(window, cx);
+                                }
+                                "strategies" => {
+                                    workspace
+                                        .focus_panel::<strategies_panel::StrategiesPanel>(window, cx);
+                                }
+                                "schedules" => {
+                                    workspace
+                                        .focus_panel::<schedules_panel::SchedulesPanel>(window, cx);
+                                }
+                                "incidents" => {
+                                    workspace
+                                        .focus_panel::<incidents_panel::IncidentsPanel>(window, cx);
+                                }
+                                "runway" => {
+                                    workspace.focus_panel::<runway_rail::RunwayRail>(window, cx);
+                                }
+                                "runs" => {
+                                    workspace.focus_panel::<runs_dock::RunsDock>(window, cx);
+                                }
+                                "validation" => {
+                                    workspace
+                                        .focus_panel::<validation_rail::ValidationRail>(window, cx);
+                                }
+                                "connections" => {
+                                    window.dispatch_action(
+                                        Box::new(auracle_connections::OpenBrokerWizard),
+                                        cx,
+                                    );
+                                }
+                                other => {
+                                    log::warn!(
+                                        "zed://auracle/panel received an unknown panel name: {other}"
+                                    );
+                                }
+                            }
+                        });
+                    })
+                })
+                .detach_and_log_err(cx);
+            }
             OpenRequestKind::SharedAgentThread { session_id } => {
                 cx.spawn(async move |cx| {
                     let multi_workspace =

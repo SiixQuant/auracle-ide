@@ -317,8 +317,9 @@ impl Render for ConnectModal {
                     .gap_1()
                     .child(
                         Label::new(
-                            "Your key — open http://127.0.0.1:1969/ui/account \
-                             in your browser and copy the key shown there",
+                            "Your key is set up automatically by the desktop \
+                             launcher. To enter it by hand, fetch it from \
+                             http://127.0.0.1:1969/ui/api/me/credentials",
                         )
                         .size(LabelSize::Small)
                         .color(Color::Muted),
