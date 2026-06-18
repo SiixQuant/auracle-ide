@@ -269,6 +269,10 @@ fn main() {
         paths::set_custom_data_dir(dir);
     }
 
+    // Carry an existing pre-rename (Zed) profile over to the Auracle
+    // directories on first launch, before any of them is read or created.
+    paths::migrate_legacy_app_dirs();
+
     #[cfg(target_os = "windows")]
     match util::get_zed_cli_path() {
         Ok(path) => askpass::set_askpass_program(path),
@@ -1769,7 +1773,7 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zed", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "auracle", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///
