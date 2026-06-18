@@ -361,14 +361,16 @@ async fn get_capability(
     Ok(serde_json::from_value(value)?)
 }
 
-/// Fetch the double-submit CSRF token: GET a /ui page so the engine
+/// Fetch the double-submit CSRF token: GET a `/ui/api` route so the engine
 /// issues an `auracle_csrf` cookie, then return its value to echo back as
-/// the `X-CSRF-Token` header on the mutation (the engine's CSRF
-/// middleware requires the cookie and header to match).
+/// the `X-CSRF-Token` header on the mutation (the engine's CSRF middleware
+/// requires the cookie and header to match). We hit `/ui/api/status` rather
+/// than an HTML page so the cookie still flows under the headless web
+/// profile, where portal pages 404 but the `/ui/api` surface stays served.
 async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, config: &AuracleConfig) -> String {
     let key = config.api_key.clone().unwrap_or_default();
     let Ok(request) = http_client::http::Request::builder()
-        .uri(format!("{}/ui/account", base_url(config)))
+        .uri(format!("{}/ui/api/status", base_url(config)))
         .header("X-API-Key", key.clone())
         .header("Cookie", format!("auracle_session={key}"))
         .body(http_client::AsyncBody::default())
