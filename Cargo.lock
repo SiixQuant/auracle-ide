@@ -16664,6 +16664,7 @@ dependencies = [
  "agent_skills",
  "anyhow",
  "audio",
+ "auracle_connections",
  "codestral",
  "component",
  "copilot",

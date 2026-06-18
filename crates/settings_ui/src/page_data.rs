@@ -76,9 +76,44 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         version_control_page(),
         collaboration_page(),
         ai_page(cx),
+        connections_page(),
         network_page(),
         developer_page(cx),
     ]
+}
+
+fn connections_page() -> SettingsPage {
+    SettingsPage {
+        title: "Connections",
+        items: vec![
+            SettingsPageItem::SectionHeader("Broker connections"),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Connect a broker".into(),
+                description: Some(
+                    "Connect a broker to route orders and pull market data. \
+                     The wizard shows what each broker can do before you connect."
+                        .into(),
+                ),
+                button_text: "Open".into(),
+                on_click: Arc::new(|settings_window, window, cx| {
+                    let Some(original_window) = settings_window.original_window else {
+                        return;
+                    };
+                    original_window
+                        .update(cx, |_workspace, original_window, cx| {
+                            original_window.dispatch_action(
+                                auracle_connections::OpenBrokerWizard.boxed_clone(),
+                                cx,
+                            );
+                            original_window.activate_window();
+                        })
+                        .ok();
+                    window.remove_window();
+                }),
+                files: USER,
+            }),
+        ],
+    }
 }
 
 fn developer_page(cx: &App) -> SettingsPage {
