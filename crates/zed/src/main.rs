@@ -1106,7 +1106,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                 }
                                 other => {
                                     log::warn!(
-                                        "zed://auracle/panel received an unknown panel name: {other}"
+                                        "auracle://panel received an unknown panel name: {other}"
                                     );
                                 }
                             }
