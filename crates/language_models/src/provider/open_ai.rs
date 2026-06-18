@@ -648,7 +648,7 @@ impl Render for ConfigurationView {
         let api_key_section = if self.should_render_editor(cx) {
             v_flex()
                 .on_action(cx.listener(Self::save_api_key))
-                .child(Label::new("To use Zed's agent with OpenAI, you need to add an API key. Follow these steps:"))
+                .child(Label::new("To use Auracle's agent with OpenAI, you need to add an API key. Follow these steps:"))
                 .child(
                     List::new()
                         .child(
@@ -666,7 +666,7 @@ impl Render for ConfigurationView {
                 .child(self.api_key_editor.clone())
                 .child(
                     Label::new(format!(
-                        "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                        "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Auracle."
                     ))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
@@ -705,7 +705,7 @@ impl Render for ConfigurationView {
                             .size(IconSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Zed also supports OpenAI-compatible models.")),
+                    .child(Label::new("Auracle also supports OpenAI-compatible models.")),
             )
             .child(
                 Button::new("docs", "Learn More")

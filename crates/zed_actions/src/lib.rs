@@ -67,7 +67,7 @@ actions!(
         OpenDocs,
         /// Views open source licenses.
         OpenLicenses,
-        /// Opens the Zed status page.
+        /// Opens the Auracle status page.
         OpenStatusPage,
         /// Opens the telemetry log.
         OpenTelemetryLog,
@@ -373,7 +373,7 @@ pub mod feedback {
     actions!(
         feedback,
         [
-            /// Opens email client to send feedback to Zed support.
+            /// Opens email client to send feedback to Auracle support.
             EmailZed,
             /// Opens the bug report form.
             FileBugReport,
