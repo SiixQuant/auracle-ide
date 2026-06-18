@@ -7,6 +7,7 @@
 //! the engine's mutation tools. The panel renders the engine's truth and
 //! never invents a schedule.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +61,18 @@ pub struct SchedulesPanel {
     schedules: Vec<ScheduleRow>,
     status: Status,
     _poll: Task<()>,
+    /// Holds the in-flight mutation POST so the task isn't dropped (and
+    /// cancelled) before it finishes. Mirrors
+    /// `auracle_connections::BrokerWizard._task`.
+    _action: Option<Task<()>>,
+    /// Schedule names whose Delete is armed (first click arms, second
+    /// click deletes) — a two-click confirm for a destructive action,
+    /// since the repo has no shared confirm dialog for dock panels.
+    /// Mirrors `incidents_panel`'s `expanded: HashSet<SharedString>`.
+    delete_armed: HashSet<SharedString>,
+    /// A short plain message shown when a mutation POST fails, cleared on
+    /// the next successful refetch so it never lingers as stale.
+    last_error: Option<SharedString>,
 }
 
 impl SchedulesPanel {
@@ -87,6 +100,9 @@ impl SchedulesPanel {
                         Status::NotConnected
                     },
                     _poll: poll,
+                    _action: None,
+                    delete_armed: HashSet::new(),
+                    last_error: None,
                 }
             })
         })
@@ -110,6 +126,7 @@ impl SchedulesPanel {
                             FetchResult::Ok(items) => {
                                 this.status = Status::Connected;
                                 this.schedules = items;
+                                this.last_error = None;
                             }
                         }
                         cx.notify();
@@ -121,6 +138,66 @@ impl SchedulesPanel {
                 cx.background_executor().timer(POLL_EVERY).await;
             }
         })
+    }
+
+    /// POST a schedule mutation, then refetch so the row reflects the new
+    /// truth (paused/resumed, a fresh run, or a removed row) without waiting
+    /// for the next poll tick. `failure_prefix` shapes the inline error when
+    /// the POST fails.
+    fn mutate_and_refetch(
+        &mut self,
+        path: String,
+        failure_prefix: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let http = cx.http_client();
+        self._action = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            if let Err(error) = post_mutation(http.clone(), &path).await {
+                this.update(cx, |this, cx| {
+                    this.last_error =
+                        Some(SharedString::from(format!("{failure_prefix}: {error}.")));
+                    cx.notify();
+                })
+                .ok();
+            }
+            let fetched = fetch_schedules(http).await;
+            this.update(cx, |this, cx| {
+                if let FetchResult::Ok(items) = fetched {
+                    this.status = Status::Connected;
+                    this.schedules = items;
+                    this.last_error = None;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn toggle(&mut self, name: SharedString, cx: &mut Context<Self>) {
+        self.mutate_and_refetch(
+            format!("/ui/api/schedules/{name}/toggle"),
+            "Couldn't pause/resume",
+            cx,
+        );
+    }
+
+    fn run_now(&mut self, name: SharedString, cx: &mut Context<Self>) {
+        self.mutate_and_refetch(format!("/ui/api/schedules/{name}/run"), "Couldn't run", cx);
+    }
+
+    /// First Delete click arms the confirm (the button relabels to "Confirm
+    /// delete"); the second click within the armed state actually deletes.
+    fn delete(&mut self, name: SharedString, cx: &mut Context<Self>) {
+        if self.delete_armed.remove(&name) {
+            self.mutate_and_refetch(
+                format!("/ui/api/schedules/{name}/delete"),
+                "Couldn't delete",
+                cx,
+            );
+        } else {
+            self.delete_armed.insert(name);
+            cx.notify();
+        }
     }
 }
 
@@ -184,6 +261,64 @@ async fn fetch_schedules(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
         Ok(items) => FetchResult::Ok(items),
         Err(_) => FetchResult::Unreachable,
     }
+}
+
+/// Fetch the double-submit CSRF token: GET `/ui/api/status` so the engine
+/// issues an `auracle_csrf` cookie, then return its value to echo back as
+/// the `X-CSRF-Token` header on the mutation. Mirrors
+/// `auracle_connections::fetch_csrf` — we hit `/ui/api/status` (not an HTML
+/// page) so the cookie still flows under the headless web profile.
+async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, base_url: &str, key: &str) -> String {
+    let Ok(request) = http_client::http::Request::builder()
+        .uri(format!("{base_url}/ui/api/status"))
+        .header("X-API-Key", key)
+        .header("Cookie", format!("auracle_session={key}"))
+        .body(http_client::AsyncBody::default())
+    else {
+        return String::new();
+    };
+    let Ok(response) = http.send(request).await else {
+        return String::new();
+    };
+    for value in response.headers().get_all("set-cookie") {
+        let Ok(cookie) = value.to_str() else { continue };
+        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
+            return rest.split(';').next().unwrap_or("").to_string();
+        }
+    }
+    String::new()
+}
+
+/// POST a `/ui/api` mutation with the dual auth headers + the double-submit
+/// CSRF token, over loopback. Mirrors `auracle_connections::post_json`; these
+/// schedule routes take an empty body. Returns the result so the caller can
+/// react — never logs the request (the session key in the headers must not
+/// reach the logs).
+async fn post_mutation(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<()> {
+    let config = auracle_connect::load_config();
+    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+        anyhow::bail!("not connected");
+    };
+    let base_url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let csrf = fetch_csrf(http.clone(), &base_url, &key).await;
+    let request = http_client::http::Request::builder()
+        .method("POST")
+        .uri(format!("{base_url}{path}"))
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", key.clone())
+        .header("X-CSRF-Token", csrf.clone())
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
+        .body(http_client::AsyncBody::default())?;
+    let response = http.send(request).await?;
+    if !response.status().is_success() {
+        anyhow::bail!("status {}", response.status());
+    }
+    Ok(())
 }
 
 impl EventEmitter<PanelEvent> for SchedulesPanel {}
@@ -302,6 +437,14 @@ impl Render for SchedulesPanel {
                     } else {
                         cx.theme().status().ignored
                     };
+                    let name = row.name.clone();
+                    // Label Pause/Resume from the row's current paused state
+                    // (enabled == running → "Pause"; paused → "Resume").
+                    let toggle_label = if row.enabled { "Pause" } else { "Resume" };
+                    let toggle_name = name.clone();
+                    let run_name = name.clone();
+                    let delete_name = name.clone();
+                    let delete_armed = self.delete_armed.contains(&name);
                     h_flex()
                         .px_2()
                         .py_1()
@@ -335,6 +478,61 @@ impl Render for SchedulesPanel {
                                         }),
                                 ),
                         )
+                        .child(div().flex_1())
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .flex_none()
+                                .child(
+                                    Button::new(
+                                        SharedString::from(format!("sched-toggle-{name}")),
+                                        toggle_label,
+                                    )
+                                    .style(ButtonStyle::Subtle)
+                                    .label_size(LabelSize::XSmall)
+                                    .tooltip(ui::Tooltip::text(if row.enabled {
+                                        "Pause this schedule (keeps it, stops the cron)"
+                                    } else {
+                                        "Resume this schedule"
+                                    }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.toggle(toggle_name.clone(), cx);
+                                    })),
+                                )
+                                .child(
+                                    Button::new(
+                                        SharedString::from(format!("sched-run-{name}")),
+                                        "Run now",
+                                    )
+                                    .style(ButtonStyle::Subtle)
+                                    .label_size(LabelSize::XSmall)
+                                    .tooltip(ui::Tooltip::text("Run this schedule once now"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.run_now(run_name.clone(), cx);
+                                    })),
+                                )
+                                .child(
+                                    Button::new(
+                                        SharedString::from(format!("sched-delete-{name}")),
+                                        if delete_armed {
+                                            "Confirm delete"
+                                        } else {
+                                            "Delete"
+                                        },
+                                    )
+                                    .style(ButtonStyle::Subtle)
+                                    .label_size(LabelSize::XSmall)
+                                    .color(Color::Error)
+                                    .tooltip(ui::Tooltip::text(if delete_armed {
+                                        "Click again to remove this schedule"
+                                    } else {
+                                        "Remove this schedule (click twice to confirm)"
+                                    }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.delete(delete_name.clone(), cx);
+                                    })),
+                                ),
+                        )
                 }))
                 .into_any_element(),
         };
@@ -345,6 +543,15 @@ impl Render for SchedulesPanel {
             .size_full()
             .bg(cx.theme().colors().panel_background)
             .child(header)
+            .when_some(self.last_error.clone(), |this, error| {
+                this.child(
+                    div().px_2().py_1().child(
+                        Label::new(error)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Error),
+                    ),
+                )
+            })
             .child(body)
     }
 }
