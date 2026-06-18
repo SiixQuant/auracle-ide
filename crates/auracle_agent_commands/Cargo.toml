@@ -14,6 +14,12 @@ workspace = true
 
 [dependencies]
 agent_ui.workspace = true
+anyhow.workspace = true
+auracle_connect.workspace = true
+auracle_connections.workspace = true
+futures.workspace = true
+http_client.workspace = true
+serde_json.workspace = true
 gpui.workspace = true
 ui.workspace = true
 workspace.workspace = true
