@@ -248,11 +248,29 @@ impl Render for RunwayRail {
             .p_2()
             .gap_1()
             .child(
-                h_flex().px_1().pb_1().child(
-                    Label::new("RUNWAY")
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted),
-                ),
+                h_flex()
+                    .px_1()
+                    .pb_1()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Label::new("RUNWAY")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        // One-click research from the runway — opens the agent
+                        // and runs the arXiv "Research ideas" scan (research_scan).
+                        Button::new("runway-research", "Research")
+                            .style(ButtonStyle::Filled)
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(auracle_agent_commands::ResearchIdeas),
+                                    cx,
+                                );
+                            }),
+                    ),
             )
             .children(STAGES.iter().enumerate().map(|(ix, (key, name, hint))| {
                 let stage = truth
