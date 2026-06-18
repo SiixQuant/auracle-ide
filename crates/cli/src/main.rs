@@ -50,15 +50,15 @@ trait InstalledApp {
 This CLI is a separate binary that invokes Auracle.
 
 Examples:
-    `zed`
+    `auracle`
           Simply opens Auracle
-    `zed --foreground`
+    `auracle --foreground`
           Runs in foreground (shows all logs)
-    `zed path-to-your-project`
+    `auracle path-to-your-project`
           Open your project in Auracle
-    `zed -n path-to-file `
+    `auracle -n path-to-file `
           Open file/folder in a new window",
-    after_help = "To read from stdin, append '-', e.g. 'ps axf | zed -'"
+    after_help = "To read from stdin, append '-', e.g. 'ps axf | auracle -'"
 )]
 struct Args {
     /// Wait for all of the given paths to be opened/closed before exiting.
@@ -1385,7 +1385,7 @@ mod mac_os {
             user_data_dir: Option<&str>,
         ) -> io::Result<ExitStatus> {
             let path = match self {
-                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/zed"),
+                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/auracle"),
                 Bundle::LocalPath { executable, .. } => executable.clone(),
             };
 
@@ -1399,7 +1399,7 @@ mod mac_os {
 
         fn path(&self) -> PathBuf {
             match self {
-                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/zed"),
+                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/auracle"),
                 Bundle::LocalPath { executable, .. } => executable.clone(),
             }
         }

@@ -244,10 +244,12 @@ pub fn logs_dir() -> &'static PathBuf {
 /// launcher handoff file (`auracle.json`) carry over untouched.
 ///
 /// This is strictly best effort: it must never block startup, so each
-/// failure is reported to stderr and skipped. It is a no-op once the new
-/// directories exist (so it only ever runs on the first post-rename launch)
-/// and is skipped entirely when a custom data dir is in force. Call it
-/// before any directory above is first read for its contents. The
+/// failure is reported to stderr and skipped. It merges entry-by-entry into
+/// an already-existing destination — so a directory another process
+/// pre-created (e.g. the launcher dropping its `auracle.json` handoff into
+/// the config dir before the IDE's first launch) never strands the rest of
+/// the profile — and is skipped entirely when a custom data dir is in force.
+/// Call it before any directory above is first read for its contents. The
 /// cache/temp dir is deliberately not migrated — it is regenerated on
 /// demand.
 pub fn migrate_legacy_app_dirs() {
@@ -287,9 +289,25 @@ pub fn migrate_legacy_app_dirs() {
     }
 
     for (old, new) in moves {
-        if new.exists() || !old.exists() {
-            continue;
-        }
+        merge_legacy_dir(&old, &new);
+    }
+}
+
+/// Move the contents of `old` into `new`, preserving anything already at
+/// `new`. A whole-directory rename is used when `new` does not exist yet;
+/// otherwise (e.g. the launcher pre-created the config dir to drop its
+/// handoff file) each legacy entry is moved individually, and only when the
+/// destination does not already hold it — so a pre-existing destination
+/// never strands the rest of the legacy profile, and never clobbers a value
+/// the new dir already has. Best effort throughout: nothing here may block
+/// startup, so failures are logged to stderr and skipped.
+fn merge_legacy_dir(old: &Path, new: &Path) {
+    if !old.exists() {
+        return;
+    }
+
+    // Fast path: clean destination → move the whole directory in one rename.
+    if !new.exists() {
         if let Some(parent) = new.parent() {
             if let Err(error) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -297,21 +315,70 @@ pub fn migrate_legacy_app_dirs() {
                     old.display(),
                     parent.display(),
                 );
-                continue;
+                return;
             }
         }
-        match std::fs::rename(&old, &new) {
-            Ok(()) => eprintln!(
-                "auracle: migrated legacy data {} -> {}",
-                old.display(),
-                new.display(),
-            ),
+        match std::fs::rename(old, new) {
+            Ok(()) => {
+                eprintln!(
+                    "auracle: migrated legacy data {} -> {}",
+                    old.display(),
+                    new.display(),
+                );
+                return;
+            }
+            // Fall through to a per-entry merge — e.g. a cross-device rename,
+            // or the destination appearing between the check and the move.
+            Err(_) => {}
+        }
+    }
+
+    // Destination already exists: merge entry by entry without clobbering.
+    if let Err(error) = std::fs::create_dir_all(new) {
+        eprintln!("auracle: skipping migration into {}: {error}", new.display());
+        return;
+    }
+    let entries = match std::fs::read_dir(old) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("auracle: skipping migration of {}: {error}", old.display());
+            return;
+        }
+    };
+    let mut moved = 0u32;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "auracle: skipping a legacy entry in {}: {error}",
+                    old.display(),
+                );
+                continue;
+            }
+        };
+        let from = entry.path();
+        let dest = new.join(entry.file_name());
+        if dest.exists() {
+            // Keep what the destination already holds (the launcher's
+            // freshly-written handoff, or a value the user already set).
+            continue;
+        }
+        match std::fs::rename(&from, &dest) {
+            Ok(()) => moved += 1,
             Err(error) => eprintln!(
                 "auracle: could not migrate {} -> {}: {error}",
-                old.display(),
-                new.display(),
+                from.display(),
+                dest.display(),
             ),
         }
+    }
+    if moved > 0 {
+        eprintln!(
+            "auracle: migrated {moved} legacy item(s) from {} into {}",
+            old.display(),
+            new.display(),
+        );
     }
 }
 
