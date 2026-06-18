@@ -112,7 +112,8 @@ fn connections_page() -> SettingsPage {
                 }),
                 files: USER,
             }),
-        ],
+        ]
+        .into_boxed_slice(),
     }
 }
 
