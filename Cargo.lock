@@ -1384,7 +1384,13 @@ name = "auracle_agent_commands"
 version = "0.1.0"
 dependencies = [
  "agent_ui",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "futures 0.3.32",
  "gpui",
+ "http_client",
+ "serde_json",
  "ui",
  "workspace",
 ]
