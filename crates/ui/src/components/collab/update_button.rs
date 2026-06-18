@@ -174,7 +174,7 @@ impl Component for UpdateButton {
 
     fn description() -> &'static str {
         "A button component displayed in the title bar to \
-        show auto-update status and allow users to restart Zed."
+        show auto-update status and allow users to restart Auracle."
     }
 
     fn preview(_window: &mut Window, _cx: &mut App) -> AnyElement {

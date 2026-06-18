@@ -173,7 +173,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 process::exit(1);
             };
 
-            let notification_id = "dev.zed.Oops";
+            let notification_id = "com.aurapointcapital.auracle.Oops";
             proxy
                 .add_notification(
                     notification_id,
@@ -374,7 +374,7 @@ fn main() {
         }
     };
     if failed_single_instance_check {
-        println!("zed is already running");
+        println!("auracle is already running");
         return;
     }
 
@@ -396,7 +396,7 @@ fn main() {
                         app_version.patch,
                     )
                     .to_string(),
-                    binary: "zed".to_string(),
+                    binary: "auracle".to_string(),
                     release_channel: release_channel::RELEASE_CHANNEL_NAME.clone(),
                     commit_sha: app_commit_sha
                         .as_ref()
@@ -409,7 +409,7 @@ fn main() {
                         background_executor1.spawn(task).detach();
                     }
                 },
-                |pid| paths::temp_dir().join(format!("zed-crash-handler-{pid}")),
+                |pid| paths::temp_dir().join(format!("auracle-crash-handler-{pid}")),
                 move |duration| background_executor.timer(duration),
             )),
         )

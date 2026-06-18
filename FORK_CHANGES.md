@@ -62,6 +62,30 @@ and are recorded here.
   cache directories remain Zed's — these are non-user-facing and
   renaming them would fork the data dirs / break upstream-rebase
   ergonomics for no customer-visible gain.
+- 2026-06-17 (7) — deep string + asset rebrand of the remaining
+  user-facing chrome. All 13 `zed_*`/`ai_zed` icon and logo SVG assets
+  renamed to `auracle_*`/`ai_auracle` (with their `IconName` /
+  `VectorName` enum variants and all call sites); the macOS Finder
+  file-type name ("Auracle Text Document"), all 12 macOS permission
+  prompts ("…in Auracle…"), the window-tabbing group identifier, the
+  REPL setup tooltip, the command-palette status/feedback descriptions,
+  the AI-provider configuration copy ("To use Auracle's agent with …",
+  "restart Auracle"), the MCP client name and OAuth/DAP client
+  identifiers, the crash-reporter binary label and notification id, and
+  the Windows product-name/dialog strings all read Auracle. The
+  command palette now displays actions as "auracle: …" while the
+  underlying action identity stays `zed::…` (the exact registry/keymap
+  lookup key — rewriting it would silently break keybindings).
+  PRINCIPLED EXCLUSIONS (unchanged, deliberately): bundled-asset names
+  referenced by path ("Zed Mono"/"Zed Plex Sans" fonts, "Zed Icons"
+  theme, the "Zed Keybind Context" language), HTTP User-Agent strings
+  some servers validate, serialized settings keys (`zed_dot_dev`,
+  `EditPredictionProvider::Zed`), the Zed-cloud paid-plan/account
+  screens (per the entry-5 exclusion), internal identifiers, tests and
+  component-gallery examples, and all GPL/Apache copyright headers. The
+  on-disk binary name and config/data directories are addressed in a
+  separate coordinated change (lockstep with the launcher + a first-run
+  config migration), recorded here when it lands.
 
 "Zed" remains a trademark of Zed Industries; this fork does not imply
 any endorsement by them. Remaining Zed marks in source and assets are
