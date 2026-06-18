@@ -749,6 +749,7 @@ fn main() {
         blotter_panel::init(cx);
         validation_rail::init(cx);
         auracle_connect::init(cx);
+        auracle_connections::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
