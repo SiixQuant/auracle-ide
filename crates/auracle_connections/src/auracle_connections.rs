@@ -93,6 +93,8 @@ struct FieldMeta {
     has_value: bool,
     #[serde(default)]
     preview: String,
+    #[serde(default)]
+    options: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -138,6 +140,10 @@ pub struct BrokerWizard {
     /// the async loaders don't carry). Editors past `fields.len()` go
     /// unrendered.
     editors: Vec<Entity<editor::Editor>>,
+    /// Chosen option per `select` field (field name -> option). Select
+    /// fields render as a segmented control, not a free-text editor — the
+    /// paper/live mode picker must be a constrained choice, not freetext.
+    selections: std::collections::HashMap<String, String>,
     capability: Option<Capability>,
     state: TestState,
     _task: Option<Task<()>>,
@@ -157,6 +163,7 @@ impl BrokerWizard {
             selected: None,
             fields: Vec::new(),
             editors,
+            selections: std::collections::HashMap::new(),
             capability: None,
             state: TestState::Idle,
             _task: None,
@@ -189,6 +196,16 @@ impl BrokerWizard {
             let fields = get_fields(http.clone(), &broker).await.unwrap_or_default();
             let capability = get_capability(http, &broker).await.ok();
             this.update(cx, |this, cx| {
+                // Default each select field to its first option so a paper/
+                // live choice is always explicit, never empty.
+                this.selections.clear();
+                for field in &fields {
+                    if field.kind == "select" {
+                        if let Some(first) = field.options.first() {
+                            this.selections.insert(field.name.clone(), first.clone());
+                        }
+                    }
+                }
                 this.fields = fields;
                 this.capability = capability;
                 cx.notify();
@@ -200,8 +217,17 @@ impl BrokerWizard {
     fn current_body(&self, cx: &App) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for (i, field) in self.fields.iter().enumerate() {
+            if field.kind == "select" {
+                if let Some(choice) = self.selections.get(&field.name) {
+                    map.insert(
+                        field.name.clone(),
+                        serde_json::Value::String(choice.clone()),
+                    );
+                }
+                continue;
+            }
             if i >= self.editors.len() {
-                break;
+                continue;
             }
             let value = self.editors[i].read(cx).text(cx);
             // Skip empty inputs so an unchanged "(saved)" sensitive field
@@ -472,7 +498,7 @@ impl BrokerWizard {
             .child(list)
     }
 
-    fn render_credentials(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_credentials(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut form = v_flex().gap_3();
         if self.fields.is_empty() {
             form = form.child(
@@ -482,9 +508,6 @@ impl BrokerWizard {
             );
         }
         for (i, field) in self.fields.iter().enumerate() {
-            if i >= self.editors.len() {
-                break;
-            }
             let mut label = if field.label.is_empty() {
                 field.name.clone()
             } else {
@@ -495,6 +518,41 @@ impl BrokerWizard {
             } else if !field.required {
                 label = format!("{label}  (optional)");
             }
+            // A `select` (e.g. the paper/live mode) renders as a segmented
+            // control so the value is always a valid option — never a typo
+            // in a free-text box. Other kinds use the text/password editor.
+            let input = if field.kind == "select" {
+                let selected = self.selections.get(&field.name).cloned().unwrap_or_default();
+                let mut segmented = h_flex().gap_1();
+                for option in field.options.clone() {
+                    let field_name = field.name.clone();
+                    let chosen = option.clone();
+                    let is_selected = option == selected;
+                    segmented = segmented.child(
+                        Button::new(
+                            SharedString::from(format!("sel-{}-{}", field.name, option)),
+                            option,
+                        )
+                        .style(if is_selected {
+                            ButtonStyle::Filled
+                        } else {
+                            ButtonStyle::Outlined
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.selections.insert(field_name.clone(), chosen.clone());
+                            cx.notify();
+                        })),
+                    );
+                }
+                segmented.into_any_element()
+            } else if i < self.editors.len() {
+                self.editors[i].clone().into_any_element()
+            } else {
+                Label::new("Set this field from the web console for now.")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+                    .into_any_element()
+            };
             form = form.child(
                 v_flex()
                     .gap_1()
@@ -503,7 +561,7 @@ impl BrokerWizard {
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
-                    .child(self.editors[i].clone()),
+                    .child(input),
             );
         }
         form
