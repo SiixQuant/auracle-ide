@@ -66,6 +66,8 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("About Auracle", zed_actions::About),
                 MenuItem::action("Check for Updates", auto_update::Check),
                 MenuItem::separator(),
+                MenuItem::action("Set Up Auracle…", auracle_onboarding::OpenOnboarding),
+                MenuItem::separator(),
                 MenuItem::submenu(Menu::new("Settings").items([
                     MenuItem::action("Open Settings", zed_actions::OpenSettings),
                     MenuItem::action("Open Settings File", super::OpenSettingsFile),

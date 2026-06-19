@@ -40,7 +40,7 @@ actions!(
     ]
 );
 
-const MAX_FIELDS: usize = 10;
+pub const MAX_FIELDS: usize = 10;
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
@@ -70,47 +70,47 @@ pub enum WizardScope {
 // ── Engine JSON shapes (introspection-driven) ────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
-struct BrokerSummary {
-    id: String,
+pub struct BrokerSummary {
+    pub id: String,
     #[serde(default)]
-    display_label: String,
+    pub display_label: String,
     #[serde(default)]
-    blurb: String,
+    pub blurb: String,
     #[serde(default)]
-    status: String,
+    pub status: String,
 }
 
 #[derive(Clone, Deserialize, Default)]
-struct FieldMeta {
-    name: String,
+pub struct FieldMeta {
+    pub name: String,
     #[serde(default)]
-    label: String,
+    pub label: String,
     #[serde(default)]
-    kind: String,
+    pub kind: String,
     #[serde(default)]
-    required: bool,
+    pub required: bool,
     #[serde(default)]
-    has_value: bool,
+    pub has_value: bool,
     #[serde(default)]
-    preview: String,
+    pub preview: String,
     #[serde(default)]
-    options: Vec<String>,
+    pub options: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Default)]
-struct Capability {
+pub struct Capability {
     #[serde(default)]
-    capabilities: std::collections::BTreeMap<String, String>,
+    pub capabilities: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    asset_kinds: Vec<String>,
+    pub asset_kinds: Vec<String>,
     #[serde(default)]
-    unsupported: Vec<String>,
+    pub unsupported: Vec<String>,
     #[serde(default)]
-    ok: bool,
+    pub ok: bool,
     #[serde(default)]
-    reason: String,
+    pub reason: String,
     #[serde(default)]
-    error: Option<String>,
+    pub error: Option<String>,
 }
 
 // ── Wizard entity ────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ async fn get_json(
     Ok(serde_json::from_str(&text)?)
 }
 
-async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<BrokerSummary>> {
+pub async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<BrokerSummary>> {
     let value = get_json(http, "/ui/api/connections").await?;
     let list = value
         .get("connections")
@@ -340,7 +340,10 @@ async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<Brok
         .collect())
 }
 
-async fn get_fields(http: Arc<dyn http_client::HttpClient>, broker: &str) -> Result<Vec<FieldMeta>> {
+pub async fn get_fields(
+    http: Arc<dyn http_client::HttpClient>,
+    broker: &str,
+) -> Result<Vec<FieldMeta>> {
     let value = get_json(http, &format!("/ui/api/connections/{broker}")).await?;
     let list = value
         .get("fields")
@@ -353,7 +356,7 @@ async fn get_fields(http: Arc<dyn http_client::HttpClient>, broker: &str) -> Res
         .collect())
 }
 
-async fn get_capability(
+pub async fn get_capability(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
 ) -> Result<Capability> {
@@ -415,7 +418,7 @@ async fn post_json(
     Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
 }
 
-async fn test_connection(
+pub async fn test_connection(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
     body: serde_json::Value,
@@ -442,7 +445,7 @@ async fn test_connection(
     }
 }
 
-async fn save_connection(
+pub async fn save_connection(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
     body: serde_json::Value,

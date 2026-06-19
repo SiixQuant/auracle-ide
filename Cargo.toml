@@ -18,6 +18,7 @@ members = [
     "crates/auracle_agent_commands",
     "crates/auracle_connect",
     "crates/auracle_connections",
+    "crates/auracle_onboarding",
     "crates/auracle_status",
     "crates/auto_update",
     "crates/auto_update_helper",
@@ -442,6 +443,7 @@ rpc = { path = "crates/rpc" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_connections = { path = "crates/auracle_connections" }
+auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_status = { path = "crates/auracle_status" }
 blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }
