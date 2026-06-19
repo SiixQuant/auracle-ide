@@ -227,7 +227,7 @@ impl AuracleSettingsPanel {
             // Find the matching visible provider. `AsyncApp::update` returns
             // the closure value directly (async_context.rs:163), so the lookup
             // comes back unwrapped.
-            let Some(provider) = cx.update(|cx| find_provider(&provider_id, cx)).flatten() else {
+            let Some(provider) = cx.update(|cx| find_provider(&provider_id, cx)) else {
                 return;
             };
 
@@ -1111,6 +1111,7 @@ fn ai_truth_row(ai_model: &AiModelState) -> Option<(String, Color)> {
 impl Render for AuracleSettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .id("auracle-settings-panel")
             .key_context("AuracleSettingsPanel")
             .track_focus(&self.focus_handle)
             .size_full()
