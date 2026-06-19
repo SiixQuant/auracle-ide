@@ -11,7 +11,7 @@ use gpui::{App, Task};
 use gpui_tokio::Tokio;
 use http_client::http::request;
 use http_client::{
-    AsyncBody, HttpClientWithUrl, HttpRequestExt, Json, Method, Request, Response, StatusCode,
+    AsyncBody, HttpClientWithUrl, HttpRequestExt, Json, Method, Request, Response, StatusCode, Url,
 };
 use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
@@ -88,11 +88,20 @@ impl CloudApiClient {
     }
 
     fn cloud_host(&self) -> String {
+        // Used only to label connection/error messages with the host that was
+        // contacted. Derive it from the configured server URL so no upstream
+        // Zed domain can ever surface under the Auracle name; fall back to the
+        // raw base URL string if it cannot be parsed as a URL.
         self.http_client
             .build_zed_cloud_url("/")
             .ok()
             .and_then(|url| url.host_str().map(String::from))
-            .unwrap_or_else(|| "cloud.zed.dev".into())
+            .or_else(|| {
+                Url::parse(&self.http_client.base_url())
+                    .ok()
+                    .and_then(|url| url.host_str().map(String::from))
+            })
+            .unwrap_or_else(|| self.http_client.base_url())
     }
 
     fn build_request(
@@ -345,4 +354,35 @@ fn build_request(
             format!("{} {}", credentials.user_id, credentials.access_token),
         )
         .body(body.into())?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_client::FakeHttpClient;
+
+    #[test]
+    fn cloud_host_derives_from_configured_server_url() {
+        let http_client = FakeHttpClient::with_200_response();
+        http_client.set_base_url("https://ide.aurapointcapital.com");
+        let client = CloudApiClient::new(http_client);
+
+        assert_eq!(client.cloud_host(), "ide.aurapointcapital.com");
+    }
+
+    #[test]
+    fn cloud_host_falls_back_to_base_url_not_zed() {
+        // When the configured base URL cannot be parsed as a URL, the host
+        // label must reflect the configured value rather than a Zed domain.
+        let http_client = FakeHttpClient::with_200_response();
+        http_client.set_base_url("not a url");
+        let client = CloudApiClient::new(http_client);
+
+        let host = client.cloud_host();
+        assert_eq!(host, "not a url");
+        assert!(
+            !host.contains("zed.dev"),
+            "cloud_host fallback must never surface a Zed domain, got {host:?}"
+        );
+    }
 }
