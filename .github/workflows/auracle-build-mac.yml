@@ -117,10 +117,22 @@ jobs:
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          # Pass the dispatch input through the environment, NOT inline as
+          # ${{ ... }} in the script body — direct interpolation would let a
+          # crafted tag value inject shell (GitHub Actions' canonical
+          # script-injection sink). Bash reads RELEASE_TAG as opaque data.
+          RELEASE_TAG: ${{ inputs.release_tag }}
         working-directory: target/aarch64-apple-darwin/release
         run: |
           set -euo pipefail
-          tag="${{ inputs.release_tag }}"
+          tag="$RELEASE_TAG"
+          # Defence in depth: bound the tag to the documented auracle-v<semver>
+          # shape (optionally a -pre / +build suffix), which also catches a
+          # typo'd tag before a draft release gets created.
+          if [[ ! "$tag" =~ ^auracle-v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.]+)?$ ]]; then
+            echo "Refusing unexpected release tag: $tag" >&2
+            exit 1
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag exists — uploading assets (clobbering old copies)."
             gh release upload "$tag" \
