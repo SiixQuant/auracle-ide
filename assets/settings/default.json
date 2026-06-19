@@ -1522,8 +1522,9 @@
   //
   // Default: false
   "disable_ai": false,
-  // Automatically update Zed. This setting may be ignored on Linux if
-  // installed through a package manager.
+  // Automatically update the IDE. Disabled by default: the Auracle launcher
+  // manages IDE updates from GitHub Releases. This setting may be ignored on
+  // Linux if installed through a package manager.
   "auto_update": false,
   // How to render LSP `textDocument/documentColor` colors in the editor.
   //
@@ -1702,8 +1703,10 @@
   //      "load_direnv": "disabled"
   "load_direnv": "direct",
   "edit_predictions": {
-    // Which edit prediction provider to use.
-    "provider": "zed",
+    // Which edit prediction provider to use. Auracle defaults this off ("none")
+    // because the Zed-hosted edit-prediction (Zeta) service is not available;
+    // users can opt into a BYO provider (e.g. "copilot", "codestral", "ollama").
+    "provider": "none",
     // A list of globs representing files that edit predictions should be disabled for.
     // There's a sensible default list of globs already included.
     // Any addition to this list will be merged with the default list.

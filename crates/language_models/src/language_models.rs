@@ -33,6 +33,12 @@ use crate::provider::vercel_ai_gateway::VercelAiGatewayLanguageModelProvider;
 use crate::provider::x_ai::XAiLanguageModelProvider;
 pub use crate::settings::*;
 
+/// Auracle white-label: the hosted Zed-cloud LLM provider (the "Auracle Agent"
+/// hosted provider) is not offered. Auracle runs no hosted-inference backend;
+/// only BYO-key providers (Anthropic/OpenAI/Google/etc.) are registered. Flip
+/// this to `true` only if a hosted-inference backend is ever stood up.
+const REGISTER_HOSTED_CLOUD_PROVIDER: bool = false;
+
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
     let credentials_provider = client.credentials_provider();
     let registry = LanguageModelRegistry::global(cx);
@@ -226,14 +232,16 @@ fn register_language_model_providers(
     credentials_provider: Arc<dyn CredentialsProvider>,
     cx: &mut Context<LanguageModelRegistry>,
 ) {
-    registry.register_provider(
-        Arc::new(CloudLanguageModelProvider::new(
-            user_store,
-            client.clone(),
+    if REGISTER_HOSTED_CLOUD_PROVIDER {
+        registry.register_provider(
+            Arc::new(CloudLanguageModelProvider::new(
+                user_store,
+                client.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
+        );
+    }
     registry.register_provider(
         Arc::new(AnthropicLanguageModelProvider::new(
             client.http_client(),

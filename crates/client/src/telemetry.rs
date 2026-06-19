@@ -524,7 +524,7 @@ impl Telemetry {
         match &mut event {
             Event::Flexible(event) => event
                 .event_properties
-                .insert("event_source".into(), "zed".into()),
+                .insert("event_source".into(), "auracle".into()),
         };
 
         if state.flush_events_task.is_none() {

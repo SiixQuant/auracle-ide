@@ -103,7 +103,6 @@ use zed_actions::{
     OpenStatusPage, OpenZedUrl, Quit,
 };
 
-const DOCS_URL: &str = "https://zed.dev/docs/";
 const STATUS_URL: &str = "https://github.com/SiixQuant/Auracle";
 
 pub struct CrashHandler(pub Arc<crashes::Client>);
@@ -615,13 +614,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 #[allow(unused)]
 fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs::fs_watcher::global(|_| {}) {
+        let docs_url = zed_urls::docs_url(cx);
         let message = format!(
             db::indoc! {r#"
             inotify_init returned {}
 
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
+            This may be due to system-wide limits on inotify instances. For troubleshooting see: {}
             "#},
-            e
+            e, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
@@ -633,7 +633,7 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(0) {
                 cx.update(|cx| {
-                    cx.open_url("https://zed.dev/docs/linux#could-not-start-inotify");
+                    cx.open_url(&docs_url);
                     cx.quit();
                 });
             }
@@ -646,13 +646,14 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
 #[allow(unused)]
 fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs::fs_watcher::global(|_| {}) {
+        let docs_url = zed_urls::docs_url(cx);
         let message = format!(
             db::indoc! {r#"
             ReadDirectoryChangesW initialization failed: {}
 
-            This may occur on network filesystems and WSL paths. For troubleshooting see: https://zed.dev/docs/windows
+            This may occur on network filesystems and WSL paths. For troubleshooting see: {}
             "#},
-            e
+            e, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
@@ -664,7 +665,7 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(0) {
                 cx.update(|cx| {
-                    cx.open_url("https://zed.dev/docs/windows");
+                    cx.open_url(&docs_url);
                     cx.quit()
                 });
             }
@@ -679,18 +680,11 @@ fn show_software_emulation_warning_if_needed(
     cx: &mut Context<Workspace>,
 ) {
     if specs.is_software_emulated && std::env::var("ZED_ALLOW_EMULATED_GPU").is_err() {
-        let (graphics_api, docs_url, open_url) = if cfg!(target_os = "windows") {
-            (
-                "DirectX",
-                "https://zed.dev/docs/windows",
-                "https://zed.dev/docs/windows",
-            )
+        let docs_url = zed_urls::docs_url(cx);
+        let graphics_api = if cfg!(target_os = "windows") {
+            "DirectX"
         } else {
-            (
-                "Vulkan",
-                "https://zed.dev/docs/linux",
-                "https://zed.dev/docs/linux#zed-fails-to-open-windows",
-            )
+            "Vulkan"
         };
         let message = format!(
             db::indoc! {r#"
@@ -714,7 +708,7 @@ fn show_software_emulation_warning_if_needed(
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(1) {
                 cx.update(|cx| {
-                    cx.open_url(open_url);
+                    cx.open_url(&docs_url);
                     cx.quit();
                 });
             }
@@ -882,7 +876,7 @@ fn register_actions(
     cx: &mut Context<Workspace>,
 ) {
     workspace
-        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(&zed_urls::docs_url(cx)))
         .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
         .register_action(
             |workspace: &mut Workspace,

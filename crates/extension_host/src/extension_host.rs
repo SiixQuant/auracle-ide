@@ -71,6 +71,21 @@ pub use extension_settings::ExtensionSettings;
 pub const RELOAD_DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
 const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 
+/// Base URL of the extension registry/gallery.
+///
+/// Auracle ships with the open VSX registry as the default extension source
+/// rather than routing extension traffic to the configured `server_url` (the
+/// trading backend, which serves no extension API). Override at runtime with
+/// the `ZED_EXTENSION_API_URL` env var.
+///
+/// NOTE: the request/response protocol used below is still the Zed-flavored
+/// `/extensions` JSON API (see [`GetExtensionsResponse`] and the
+/// `/extensions/{id}/download` paths). open VSX additionally exposes a
+/// VSCode-marketplace-compatible gallery at `/vscode/gallery` + `/vscode/item`
+/// which speaks a different protocol; wiring that requires a request/response
+/// adapter and is tracked as follow-up.
+const OPEN_VSX_GALLERY_URL: &str = "https://open-vsx.org";
+
 /// The current extension [`SchemaVersion`] supported by Zed.
 const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion(1);
 
@@ -675,13 +690,29 @@ impl ExtensionStore {
         anyhow::Ok(())
     }
 
+    /// Builds an extension-registry URL against the open VSX gallery base
+    /// (overridable via `ZED_EXTENSION_API_URL`).
+    ///
+    /// This deliberately does NOT use [`HttpClientWithUrl::build_zed_api_url`],
+    /// which derives its host from the configured `server_url`: that points at
+    /// the Auracle trading backend, which serves no extension API. Telemetry and
+    /// other `build_zed_api_url` callers are left untouched.
+    fn build_extension_api_url(path: &str, query: &[(&str, &str)]) -> Result<Url> {
+        let base_url = std::env::var("ZED_EXTENSION_API_URL")
+            .unwrap_or_else(|_| OPEN_VSX_GALLERY_URL.to_string());
+        Ok(Url::parse_with_params(
+            &format!("{}{}", base_url.trim_end_matches('/'), path),
+            query,
+        )?)
+    }
+
     fn fetch_extensions_from_api(
         &self,
         path: &str,
         query: &[(&str, &str)],
         cx: &mut Context<ExtensionStore>,
     ) -> Task<Result<Vec<ExtensionMetadata>>> {
-        let url = self.http_client.build_zed_api_url(path, query);
+        let url = Self::build_extension_api_url(path, query);
         let http_client = self.http_client.clone();
         cx.spawn(async move |_, _| {
             let mut response = http_client
@@ -843,22 +874,19 @@ impl ExtensionStore {
         let schema_versions = schema_version_range();
         let wasm_api_versions = wasm_api_version_range(ReleaseChannel::global(cx));
 
-        let Some(url) = self
-            .http_client
-            .build_zed_api_url(
-                &format!("/extensions/{extension_id}/download"),
-                &[
-                    ("min_schema_version", &schema_versions.start().to_string()),
-                    ("max_schema_version", &schema_versions.end().to_string()),
-                    (
-                        "min_wasm_api_version",
-                        &wasm_api_versions.start().to_string(),
-                    ),
-                    ("max_wasm_api_version", &wasm_api_versions.end().to_string()),
-                ],
-            )
-            .log_err()
-        else {
+        let Some(url) = Self::build_extension_api_url(
+            &format!("/extensions/{extension_id}/download"),
+            &[
+                ("min_schema_version", &schema_versions.start().to_string()),
+                ("max_schema_version", &schema_versions.end().to_string()),
+                (
+                    "min_wasm_api_version",
+                    &wasm_api_versions.start().to_string(),
+                ),
+                ("max_wasm_api_version", &wasm_api_versions.end().to_string()),
+            ],
+        )
+        .log_err() else {
             return;
         };
 
@@ -888,14 +916,11 @@ impl ExtensionStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         log::info!("installing extension {extension_id} {version}");
-        let Some(url) = self
-            .http_client
-            .build_zed_api_url(
-                &format!("/extensions/{extension_id}/{version}/download"),
-                &[],
-            )
-            .log_err()
-        else {
+        let Some(url) = Self::build_extension_api_url(
+            &format!("/extensions/{extension_id}/{version}/download"),
+            &[],
+        )
+        .log_err() else {
             return Task::ready(Ok(()));
         };
 
