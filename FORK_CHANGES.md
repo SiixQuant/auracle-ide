@@ -62,6 +62,52 @@ and are recorded here.
   cache directories remain Zed's — these are non-user-facing and
   renaming them would fork the data dirs / break upstream-rebase
   ergonomics for no customer-visible gain.
+- 2026-06-17 (7) — deep string + asset rebrand of the remaining
+  user-facing chrome. All 13 `zed_*`/`ai_zed` icon and logo SVG assets
+  renamed to `auracle_*`/`ai_auracle` (with their `IconName` /
+  `VectorName` enum variants and all call sites); the macOS Finder
+  file-type name ("Auracle Text Document"), all 12 macOS permission
+  prompts ("…in Auracle…"), the window-tabbing group identifier, the
+  REPL setup tooltip, the command-palette status/feedback descriptions,
+  the AI-provider configuration copy ("To use Auracle's agent with …",
+  "restart Auracle"), the MCP client name and OAuth/DAP client
+  identifiers, the crash-reporter binary label and notification id, and
+  the Windows product-name/dialog strings all read Auracle. The
+  command palette now displays actions as "auracle: …" while the
+  underlying action identity stays `zed::…` (the exact registry/keymap
+  lookup key — rewriting it would silently break keybindings).
+  PRINCIPLED EXCLUSIONS (unchanged, deliberately): bundled-asset names
+  referenced by path ("Zed Mono"/"Zed Plex Sans" fonts, "Zed Icons"
+  theme, the "Zed Keybind Context" language), HTTP User-Agent strings
+  some servers validate, serialized settings keys (`zed_dot_dev`,
+  `EditPredictionProvider::Zed`), the Zed-cloud paid-plan/account
+  screens (per the entry-5 exclusion), internal identifiers, tests and
+  component-gallery examples, and all GPL/Apache copyright headers. The
+  on-disk binary name and config/data directories are addressed in a
+  separate coordinated change (lockstep with the launcher + a first-run
+  config migration), recorded here when it lands.
+- 2026-06-17 (8) — on-disk identity rename (supersedes the entry-6 note
+  that the binary and data dirs stayed Zed's). `APP_NAME` is now
+  "Auracle", so the macOS data, config, state and log directories become
+  `~/Library/Application Support/Auracle`, `~/.config/auracle`,
+  `~/.local/state/Auracle` and `~/Library/Logs/Auracle`; the log files
+  become `Auracle.log`. The main binary target is renamed `zed` →
+  `auracle` (Cargo `[[bin]]`, `default-run`, the clap CLI name, and the
+  `install-cli` symlink `/usr/local/bin/auracle`, so the terminal command
+  is `auracle`); the macOS bundle pipeline (`script/bundle-mac`), the
+  build workflow artifact, and the auto-update mount path move with it.
+  The compile-time guard in `crates/zed/src/main.rs` keeps the binary
+  name and `APP_NAME` in lockstep. A best-effort, one-time startup
+  migration (`paths::migrate_legacy_app_dirs`) moves any pre-rename Zed
+  data/config/state/log directories into the new names so existing
+  settings, keymaps, the local database and the launcher handoff file
+  carry over. This change deploys in lockstep with the launcher
+  (auracle-desktop), which now writes its handoff into the Auracle config
+  dir. PRINCIPLED EXCLUSIONS: the Cargo *package* name stays `zed` (an
+  internal identifier; renaming it churns every dependent with no
+  user-visible gain), as do the `crates/zed/` directory, the
+  `zed.entitlements` build asset, the Sentry project slug, and the
+  upstream Linux/Windows release workflows that this fork does not run.
 
 "Zed" remains a trademark of Zed Industries; this fork does not imply
 any endorsement by them. Remaining Zed marks in source and assets are

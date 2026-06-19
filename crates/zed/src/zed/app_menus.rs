@@ -66,6 +66,12 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("About Auracle", zed_actions::About),
                 MenuItem::action("Check for Updates", auto_update::Check),
                 MenuItem::separator(),
+                MenuItem::action("Set Up Auracle…", auracle_onboarding::OpenOnboarding),
+                MenuItem::action(
+                    "Connections & AI Model",
+                    auracle_onboarding::OpenConnections,
+                ),
+                MenuItem::separator(),
                 MenuItem::submenu(Menu::new("Settings").items([
                     MenuItem::action("Open Settings", zed_actions::OpenSettings),
                     MenuItem::action("Open Settings File", super::OpenSettingsFile),
@@ -311,22 +317,10 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     "Documentation",
                     super::OpenBrowser {
-                        url: "https://zed.dev/docs".into(),
+                        url: "https://github.com/SiixQuant/Auracle/wiki".into(),
                     },
                 ),
                 MenuItem::action("Auracle Repository", feedback::OpenZedRepo),
-                MenuItem::action(
-                    "Auracle Twitter",
-                    super::OpenBrowser {
-                        url: "https://twitter.com/zeddotdev".into(),
-                    },
-                ),
-                MenuItem::action(
-                    "Join the Team",
-                    super::OpenBrowser {
-                        url: "https://zed.dev/jobs".into(),
-                    },
-                ),
             ],
         },
     ]

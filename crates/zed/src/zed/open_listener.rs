@@ -59,6 +59,14 @@ pub enum OpenRequestKind {
     AgentPanel {
         external_source_prompt: Option<ExternalSourcePrompt>,
     },
+    /// Deep-link from the desktop launcher to focus a native Auracle panel
+    /// (or the broker-connect wizard) — `auracle://panel/<name>` (aliased to
+    /// the internal `zed://panel/<name>`). Lets the launcher route a
+    /// capability to the IDE's native surface now that the Houston HTML
+    /// portal is no longer linked.
+    AuraclePanel {
+        name: String,
+    },
     SharedAgentThread {
         session_id: String,
     },
@@ -99,6 +107,9 @@ impl std::fmt::Debug for OpenRequestKind {
                 .debug_struct("AgentPanel")
                 .field("external_source_prompt", external_source_prompt)
                 .finish(),
+            Self::AuraclePanel { name } => {
+                f.debug_struct("AuraclePanel").field("name", name).finish()
+            }
             Self::SharedAgentThread { session_id } => f
                 .debug_struct("SharedAgentThread")
                 .field("session_id", session_id)
@@ -161,6 +172,15 @@ impl OpenRequest {
         }
 
         for url in request.urls {
+            // Accept the app's public `auracle://` scheme (the one registered
+            // in the macOS bundle) by aliasing it to the internal canonical
+            // `zed://` scheme the handlers below match on. `zed://` and
+            // `zed-cli://` keep working unchanged for the CLI/back-compat.
+            let url = if url.starts_with("auracle://") {
+                url.replacen("auracle://", "zed://", 1)
+            } else {
+                url
+            };
             if let Some(server_name) = url.strip_prefix("zed-cli://") {
                 this.kind = Some(OpenRequestKind::CliConnection(connect_to_cli(server_name)?));
             } else if let Some(action_index) = url.strip_prefix("zed-dock-action://") {
@@ -201,6 +221,10 @@ impl OpenRequest {
             } else if let Some(setting_path) = url.strip_prefix("zed://settings/") {
                 this.kind = Some(OpenRequestKind::Setting {
                     setting_path: Some(setting_path.to_string()),
+                });
+            } else if let Some(name) = url.strip_prefix("zed://panel/") {
+                this.kind = Some(OpenRequestKind::AuraclePanel {
+                    name: name.trim_end_matches('/').to_string(),
                 });
             } else if let Some(clone_path) = url.strip_prefix("zed://git/clone") {
                 this.parse_git_clone_url(clone_path)?

@@ -43,6 +43,14 @@ pub fn init(cx: &mut App) {
 struct Order {
     status: SharedString,
     plain: SharedString,
+    /// The broker's live order id (IBKR int, ClearStreet UUID), echoed
+    /// back to `POST /ui/api/orders/cancel/{order_id}`. The cancel route
+    /// addresses the broker's open-orders book, NOT our DB row id, so a
+    /// per-row Cancel is only honest when the feed carries this id. The
+    /// activity feed omits it today, so per-row Cancel stays hidden until
+    /// the engine adds `broker_order_id` to `/ui/api/orders` — the header
+    /// "Cancel all" (which is id-agnostic) covers cancel in the meantime.
+    broker_order_id: Option<SharedString>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -58,6 +66,12 @@ pub struct BlotterPanel {
     orders: Vec<Order>,
     status: Status,
     _poll: Task<()>,
+    /// Holds the in-flight cancel POST so it isn't dropped (and cancelled)
+    /// before it finishes. Mirrors `auracle_connections::BrokerWizard._task`.
+    _action: Option<Task<()>>,
+    /// A short plain message shown when a cancel POST fails, cleared on the
+    /// next successful refetch so it never lingers as stale.
+    last_error: Option<SharedString>,
 }
 
 impl BlotterPanel {
@@ -85,6 +99,8 @@ impl BlotterPanel {
                         Status::NotConnected
                     },
                     _poll: poll,
+                    _action: None,
+                    last_error: None,
                 }
             })
         })
@@ -108,6 +124,7 @@ impl BlotterPanel {
                             FetchResult::Ok(items) => {
                                 this.status = Status::Connected;
                                 this.orders = items;
+                                this.last_error = None;
                             }
                         }
                         cx.notify();
@@ -129,6 +146,78 @@ impl BlotterPanel {
             "cancelled" | "canceled" => colors.ignored,
             _ => colors.info, // submitted / pending / routed — on its way
         }
+    }
+
+    /// Whether an order is still working at the broker and therefore
+    /// cancellable. A positive allowlist of the engine's in-flight statuses
+    /// (`pending` / `sent` / `partially_filled`, plus the broker-snapshot
+    /// words `working` / `open` / `submitted` / `routed`). Notably `dry_run`
+    /// is NOT cancellable — it's a preview that never reached a broker — and
+    /// the terminal statuses (`executed` / `filled` / `cancelled` /
+    /// `rejected` / `failed`) are done.
+    fn is_cancellable(status: &str) -> bool {
+        matches!(
+            status.to_lowercase().as_str(),
+            "pending"
+                | "sent"
+                | "partially_filled"
+                | "working"
+                | "open"
+                | "submitted"
+                | "routed"
+        )
+    }
+
+    fn cancel_order(&mut self, order_id: SharedString, cx: &mut Context<Self>) {
+        let http = cx.http_client();
+        self._action = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            // Refetch regardless of outcome — a failed cancel leaves the row
+            // working (the next poll/refetch shows that truth honestly); a
+            // successful one flips it to cancelled.
+            if let Err(error) =
+                post_mutation(http.clone(), &format!("/ui/api/orders/cancel/{order_id}")).await
+            {
+                this.update(cx, |this, cx| {
+                    this.last_error = Some(SharedString::from(format!("Couldn't cancel: {error}.")));
+                    cx.notify();
+                })
+                .ok();
+            }
+            let fetched = fetch_orders(http).await;
+            this.update(cx, |this, cx| {
+                if let FetchResult::Ok(items) = fetched {
+                    this.status = Status::Connected;
+                    this.orders = items;
+                    this.last_error = None;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn cancel_all(&mut self, cx: &mut Context<Self>) {
+        let http = cx.http_client();
+        self._action = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            if let Err(error) = post_mutation(http.clone(), "/ui/api/orders/cancel-all").await {
+                this.update(cx, |this, cx| {
+                    this.last_error =
+                        Some(SharedString::from(format!("Couldn't cancel all: {error}.")));
+                    cx.notify();
+                })
+                .ok();
+            }
+            let fetched = fetch_orders(http).await;
+            this.update(cx, |this, cx| {
+                if let FetchResult::Ok(items) = fetched {
+                    this.status = Status::Connected;
+                    this.orders = items;
+                    this.last_error = None;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 }
 
@@ -165,6 +254,19 @@ async fn fetch_orders(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
                 if plain.is_empty() {
                     continue;
                 }
+                // `broker_order_id` is the only id the cancel route accepts
+                // (it addresses the broker's open-orders book, not our DB
+                // row id). Accept a string or a numeric id; absent/empty
+                // means this row can't be cancelled one-off from here.
+                let broker_order_id = it
+                    .get("broker_order_id")
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| v.as_i64().map(|n| n.to_string()))
+                    })
+                    .filter(|s| !s.trim().is_empty())
+                    .map(SharedString::from);
                 out.push(Order {
                     status: SharedString::from(
                         it.get("status")
@@ -173,6 +275,7 @@ async fn fetch_orders(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
                             .to_string(),
                     ),
                     plain: SharedString::from(plain.to_string()),
+                    broker_order_id,
                 });
             }
         }
@@ -183,6 +286,64 @@ async fn fetch_orders(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
         Ok(items) => FetchResult::Ok(items),
         Err(_) => FetchResult::Unreachable,
     }
+}
+
+/// Fetch the double-submit CSRF token: GET `/ui/api/status` so the engine
+/// issues an `auracle_csrf` cookie, then return its value to echo back as
+/// the `X-CSRF-Token` header on the mutation. Mirrors
+/// `auracle_connections::fetch_csrf` — we hit `/ui/api/status` (not an HTML
+/// page) so the cookie still flows under the headless web profile.
+async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, base_url: &str, key: &str) -> String {
+    let Ok(request) = http_client::http::Request::builder()
+        .uri(format!("{base_url}/ui/api/status"))
+        .header("X-API-Key", key)
+        .header("Cookie", format!("auracle_session={key}"))
+        .body(http_client::AsyncBody::default())
+    else {
+        return String::new();
+    };
+    let Ok(response) = http.send(request).await else {
+        return String::new();
+    };
+    for value in response.headers().get_all("set-cookie") {
+        let Ok(cookie) = value.to_str() else { continue };
+        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
+            return rest.split(';').next().unwrap_or("").to_string();
+        }
+    }
+    String::new()
+}
+
+/// POST a `/ui/api` mutation with the dual auth headers + the double-submit
+/// CSRF token, over loopback. Mirrors `auracle_connections::post_json`; the
+/// cancel routes take an empty body. Returns the result so the caller can
+/// react — never logs the request (the session key in the headers must not
+/// reach the logs).
+async fn post_mutation(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<()> {
+    let config = auracle_connect::load_config();
+    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+        anyhow::bail!("not connected");
+    };
+    let base_url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let csrf = fetch_csrf(http.clone(), &base_url, &key).await;
+    let request = http_client::http::Request::builder()
+        .method("POST")
+        .uri(format!("{base_url}{path}"))
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", key.clone())
+        .header("X-CSRF-Token", csrf.clone())
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
+        .body(http_client::AsyncBody::default())?;
+    let response = http.send(request).await?;
+    if !response.status().is_success() {
+        anyhow::bail!("status {}", response.status());
+    }
+    Ok(())
 }
 
 impl EventEmitter<PanelEvent> for BlotterPanel {}
@@ -241,6 +402,15 @@ impl Panel for BlotterPanel {
 
 impl Render for BlotterPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // "Cancel all" is a kill-switch over the broker's whole open book, so
+        // it's offered whenever connected with at least one working order —
+        // it needs no per-row broker id (unlike single-order cancel).
+        let has_cancellable = self.status == Status::Connected
+            && self
+                .orders
+                .iter()
+                .any(|order| Self::is_cancellable(&order.status));
+
         let header = h_flex()
             .px_2()
             .py_1()
@@ -258,7 +428,20 @@ impl Render for BlotterPanel {
                 Label::new("· Monitor · from your records")
                     .size(LabelSize::XSmall)
                     .color(Color::Muted),
-            );
+            )
+            .when(has_cancellable, |row| {
+                row.child(div().flex_1()).child(
+                    Button::new("blotter-cancel-all", "Cancel all")
+                        .style(ButtonStyle::Outlined)
+                        .label_size(LabelSize::XSmall)
+                        .size(ButtonSize::Compact)
+                        .color(Color::Error)
+                        .tooltip(ui::Tooltip::text(
+                            "Cancel every working order on the active broker",
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_all(cx))),
+                )
+            });
 
         let body: AnyElement = match self.status {
             Status::NotConnected => v_flex()
@@ -302,9 +485,16 @@ impl Render for BlotterPanel {
                 .gap_0p5()
                 .children(self.orders.iter().map(|order| {
                     let dot = self.status_color(&order.status, cx);
-                    // Read-only record rows — no hover highlight (a row
-                    // isn't clickable; the highlight would imply an
-                    // action that doesn't exist).
+                    // A per-row Cancel is only honest when the row is still
+                    // working AND carries the broker order id the cancel
+                    // route addresses (the activity feed exposes the DB row
+                    // id, which the route would NOT match). Until the engine
+                    // adds `broker_order_id` to /ui/api/orders, this stays
+                    // hidden and the header "Cancel all" carries cancel.
+                    let cancel_target = order
+                        .broker_order_id
+                        .clone()
+                        .filter(|_| Self::is_cancellable(&order.status));
                     h_flex()
                         .px_2()
                         .py_1()
@@ -322,6 +512,21 @@ impl Render for BlotterPanel {
                         .child(
                             Label::new(order.plain.clone()).size(LabelSize::Small),
                         )
+                        .when_some(cancel_target, |row, order_id| {
+                            row.child(div().flex_1()).child(
+                                Button::new(
+                                    SharedString::from(format!("cancel-{order_id}")),
+                                    "Cancel",
+                                )
+                                .style(ButtonStyle::Subtle)
+                                .label_size(LabelSize::XSmall)
+                                .color(Color::Error)
+                                .tooltip(ui::Tooltip::text("Cancel this working order"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.cancel_order(order_id.clone(), cx);
+                                })),
+                            )
+                        })
                 }))
                 .into_any_element(),
         };
@@ -332,6 +537,15 @@ impl Render for BlotterPanel {
             .size_full()
             .bg(cx.theme().colors().panel_background)
             .child(header)
+            .when_some(self.last_error.clone(), |this, error| {
+                this.child(
+                    div().px_2().py_1().child(
+                        Label::new(error)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Error),
+                    ),
+                )
+            })
             .child(body)
     }
 }

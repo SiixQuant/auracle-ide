@@ -197,6 +197,10 @@ impl LanguageModelProvider for DeepSeekLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
+    fn set_api_key(&self, key: Option<String>, cx: &mut App) -> Task<Result<()>> {
+        self.state.update(cx, |state, cx| state.set_api_key(key, cx))
+    }
+
     fn configuration_view(
         &self,
         _target_agent: language_model::ConfigurationViewTargetAgent,
@@ -730,7 +734,7 @@ impl Render for ConfigurationView {
             v_flex()
                 .size_full()
                 .on_action(cx.listener(Self::save_api_key))
-                .child(Label::new("To use DeepSeek in Zed, you need an API key:"))
+                .child(Label::new("To use DeepSeek in Auracle, you need an API key:"))
                 .child(
                     List::new()
                         .child(
@@ -748,7 +752,7 @@ impl Render for ConfigurationView {
                 .child(self.api_key_editor.clone())
                 .child(
                     Label::new(format!(
-                        "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                        "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Auracle."
                     ))
                     .size(LabelSize::Small)
                     .color(Color::Muted),

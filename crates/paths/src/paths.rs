@@ -15,7 +15,7 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// and state directory paths.
 ///
 /// Forks should change this to avoid colliding with Zed's user data.
-pub const APP_NAME: &str = "Zed";
+pub const APP_NAME: &str = "Auracle";
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
 /// Linux/FreeBSD and the macOS `~/.config` fallback.
@@ -234,6 +234,152 @@ pub fn logs_dir() -> &'static PathBuf {
             data_dir().join("logs")
         }
     })
+}
+
+/// One-time migration for installs that predate the Zed→Auracle rename.
+///
+/// When the current Auracle data/config/state/log directories do not exist
+/// yet but the former Zed ones do, move them into place so existing
+/// settings, keymaps, the local database, restored session state, and the
+/// launcher handoff file (`auracle.json`) carry over untouched.
+///
+/// This is strictly best effort: it must never block startup, so each
+/// failure is reported to stderr and skipped. It merges entry-by-entry into
+/// an already-existing destination — so a directory another process
+/// pre-created (e.g. the launcher dropping its `auracle.json` handoff into
+/// the config dir before the IDE's first launch) never strands the rest of
+/// the profile — and is skipped entirely when a custom data dir is in force.
+/// Call it before any directory above is first read for its contents. The
+/// cache/temp dir is deliberately not migrated — it is regenerated on
+/// demand.
+pub fn migrate_legacy_app_dirs() {
+    if CUSTOM_DATA_DIR.get().is_some() {
+        return;
+    }
+
+    let home = home_dir();
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+
+    if cfg!(target_os = "macos") {
+        let support = home.join("Library/Application Support");
+        moves.push((support.join("Zed"), support.join(APP_NAME)));
+        let logs = home.join("Library/Logs");
+        moves.push((logs.join("Zed"), logs.join(APP_NAME)));
+        let state = home.join(".local").join("state");
+        moves.push((state.join("Zed"), state.join(APP_NAME)));
+        let config = home.join(".config");
+        moves.push((config.join("zed"), config.join(APP_NAME_LOWERCASE)));
+    } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        if let Some(data) = dirs::data_local_dir() {
+            moves.push((data.join("zed"), data.join(APP_NAME_LOWERCASE)));
+        }
+        if let Some(config) = dirs::config_dir() {
+            moves.push((config.join("zed"), config.join(APP_NAME_LOWERCASE)));
+        }
+        if let Some(state) = dirs::state_dir() {
+            moves.push((state.join("zed"), state.join(APP_NAME_LOWERCASE)));
+        }
+    } else if cfg!(target_os = "windows") {
+        if let Some(data) = dirs::data_local_dir() {
+            moves.push((data.join("Zed"), data.join(APP_NAME)));
+        }
+        if let Some(config) = dirs::config_dir() {
+            moves.push((config.join("Zed"), config.join(APP_NAME)));
+        }
+    }
+
+    for (old, new) in moves {
+        merge_legacy_dir(&old, &new);
+    }
+}
+
+/// Move the contents of `old` into `new`, preserving anything already at
+/// `new`. A whole-directory rename is used when `new` does not exist yet;
+/// otherwise (e.g. the launcher pre-created the config dir to drop its
+/// handoff file) each legacy entry is moved individually, and only when the
+/// destination does not already hold it — so a pre-existing destination
+/// never strands the rest of the legacy profile, and never clobbers a value
+/// the new dir already has. Best effort throughout: nothing here may block
+/// startup, so failures are logged to stderr and skipped.
+fn merge_legacy_dir(old: &Path, new: &Path) {
+    if !old.exists() {
+        return;
+    }
+
+    // Fast path: clean destination → move the whole directory in one rename.
+    if !new.exists() {
+        if let Some(parent) = new.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "auracle: skipping migration of {}: could not create {}: {error}",
+                    old.display(),
+                    parent.display(),
+                );
+                return;
+            }
+        }
+        match std::fs::rename(old, new) {
+            Ok(()) => {
+                eprintln!(
+                    "auracle: migrated legacy data {} -> {}",
+                    old.display(),
+                    new.display(),
+                );
+                return;
+            }
+            // Fall through to a per-entry merge — e.g. a cross-device rename,
+            // or the destination appearing between the check and the move.
+            Err(_) => {}
+        }
+    }
+
+    // Destination already exists: merge entry by entry without clobbering.
+    if let Err(error) = std::fs::create_dir_all(new) {
+        eprintln!("auracle: skipping migration into {}: {error}", new.display());
+        return;
+    }
+    let entries = match std::fs::read_dir(old) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("auracle: skipping migration of {}: {error}", old.display());
+            return;
+        }
+    };
+    let mut moved = 0u32;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "auracle: skipping a legacy entry in {}: {error}",
+                    old.display(),
+                );
+                continue;
+            }
+        };
+        let from = entry.path();
+        let dest = new.join(entry.file_name());
+        if dest.exists() {
+            // Keep what the destination already holds (the launcher's
+            // freshly-written handoff, or a value the user already set).
+            continue;
+        }
+        match std::fs::rename(&from, &dest) {
+            Ok(()) => moved += 1,
+            Err(error) => eprintln!(
+                "auracle: could not migrate {} -> {}: {error}",
+                from.display(),
+                dest.display(),
+            ),
+        }
+    }
+    if moved > 0 {
+        eprintln!(
+            "auracle: migrated {moved} legacy item(s) from {} into {}",
+            old.display(),
+            new.display(),
+        );
+    }
 }
 
 /// Returns the path to the Zed server directory on this SSH host.

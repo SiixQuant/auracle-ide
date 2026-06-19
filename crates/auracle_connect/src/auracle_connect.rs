@@ -80,6 +80,31 @@ pub fn init(cx: &mut App) {
         });
     })
     .detach();
+
+    // Auto-connect on startup. Without this the IDE only ever connects when
+    // the user re-opens the Connect modal and saves, so a saved connection
+    // never takes effect on launch. If a saved key exists, verify it in the
+    // background and, on success, bump ConnectGeneration so live panels
+    // connect just as a manual save would. A missing key or an unreachable
+    // engine is intentionally silent here — the user resolves it via the
+    // Connect modal — so launch never blocks or spams an error.
+    let config = load_config();
+    if config.api_key.as_deref().unwrap_or_default().is_empty() {
+        return;
+    }
+    let http = cx.http_client();
+    cx.spawn(async move |cx| {
+        // Best-effort: a missing key or unreachable engine on startup is
+        // expected (the user resolves it via the Connect modal), so only act
+        // on a successful verify and otherwise leave the IDE disconnected.
+        if test_connection(http, &config).await.is_ok() {
+            cx.update(|cx| {
+                let generation = cx.global::<ConnectGeneration>().0 + 1;
+                cx.set_global(ConnectGeneration(generation));
+            });
+        }
+    })
+    .detach();
 }
 
 enum TestState {
@@ -292,8 +317,9 @@ impl Render for ConnectModal {
                     .gap_1()
                     .child(
                         Label::new(
-                            "Your key — open http://127.0.0.1:1969/ui/account \
-                             in your browser and copy the key shown there",
+                            "Your key is set up automatically by the desktop \
+                             launcher. To enter it by hand, fetch it from \
+                             http://127.0.0.1:1969/ui/api/me/credentials",
                         )
                         .size(LabelSize::Small)
                         .color(Color::Muted),

@@ -3083,6 +3083,29 @@ impl AgentPanel {
         self.serialize(cx);
     }
 
+    /// Open a fresh agent thread seeded with `prompt` and auto-submit it,
+    /// using the panel's currently-selected agent. This is the entry point for
+    /// the native Auracle command-palette commands ("Research ideas", "Run
+    /// backtest", …): each one drives the agent through a single preset request
+    /// that, in turn, calls the engine's MCP tools.
+    pub fn start_auracle_prompt(
+        &mut self,
+        title: SharedString,
+        prompt: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let options = CreateThreadOptions {
+            title: Some(title),
+            initial_content: Some(AgentInitialContent::ContentBlock {
+                blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
+                auto_submit: true,
+            }),
+            ..Default::default()
+        };
+        self.create_thread_with_options(options, AgentThreadSource::AgentPanel, window, cx);
+    }
+
     /// Creates a new retained thread and inserts it into the sidebar without
     /// switching the active view to it. Used by the `create_thread` agent tool,
     /// which passes an initial prompt, and optionally an agent and model
@@ -5085,7 +5108,7 @@ impl Panel for AgentPanel {
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<IconName> {
-        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::ZedAssistant)
+        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::AuracleAssistant)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -5881,7 +5904,7 @@ impl AgentPanel {
                                     !showing_terminal && is_agent_selected(Agent::NativeAgent),
                                     |this| this.action(Box::new(NewThread)),
                                 )
-                                .icon(IconName::ZedAgent)
+                                .icon(IconName::AuracleAgent)
                                 .icon_color(Color::Muted)
                                 .handler({
                                     let workspace = workspace.clone();
@@ -6157,7 +6180,7 @@ impl AgentPanel {
                     .size(IconSize::Small)
                     .color(icon_color)
             } else {
-                let icon_name = selected_agent_builtin_icon.unwrap_or(IconName::ZedAgent);
+                let icon_name = selected_agent_builtin_icon.unwrap_or(IconName::AuracleAgent);
                 Icon::new(icon_name).size(IconSize::Small).color(icon_color)
             };
 

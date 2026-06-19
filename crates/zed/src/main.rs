@@ -173,7 +173,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 process::exit(1);
             };
 
-            let notification_id = "dev.zed.Oops";
+            let notification_id = "com.aurapointcapital.auracle.Oops";
             proxy
                 .add_notification(
                     notification_id,
@@ -268,6 +268,10 @@ fn main() {
     if let Some(dir) = &args.user_data_dir {
         paths::set_custom_data_dir(dir);
     }
+
+    // Carry an existing pre-rename (Zed) profile over to the Auracle
+    // directories on first launch, before any of them is read or created.
+    paths::migrate_legacy_app_dirs();
 
     #[cfg(target_os = "windows")]
     match util::get_zed_cli_path() {
@@ -374,7 +378,7 @@ fn main() {
         }
     };
     if failed_single_instance_check {
-        println!("zed is already running");
+        println!("auracle is already running");
         return;
     }
 
@@ -396,7 +400,7 @@ fn main() {
                         app_version.patch,
                     )
                     .to_string(),
-                    binary: "zed".to_string(),
+                    binary: "auracle".to_string(),
                     release_channel: release_channel::RELEASE_CHANNEL_NAME.clone(),
                     commit_sha: app_commit_sha
                         .as_ref()
@@ -409,7 +413,7 @@ fn main() {
                         background_executor1.spawn(task).detach();
                     }
                 },
-                |pid| paths::temp_dir().join(format!("zed-crash-handler-{pid}")),
+                |pid| paths::temp_dir().join(format!("auracle-crash-handler-{pid}")),
                 move |duration| background_executor.timer(duration),
             )),
         )
@@ -745,6 +749,8 @@ fn main() {
         blotter_panel::init(cx);
         validation_rail::init(cx);
         auracle_connect::init(cx);
+        auracle_connections::init(cx);
+        auracle_onboarding::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
@@ -1045,6 +1051,65 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                     "zed://agent received but the AgentPanel is not registered \
                                      (is `disable_ai` enabled?)"
                                 );
+                            }
+                        });
+                    })
+                })
+                .detach_and_log_err(cx);
+            }
+            OpenRequestKind::AuraclePanel { name } => {
+                cx.spawn(async move |cx| {
+                    let multi_workspace =
+                        workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?;
+
+                    let panels_task = multi_workspace.update(cx, |multi_workspace, _, cx| {
+                        multi_workspace
+                            .workspace()
+                            .update(cx, |workspace, _| workspace.take_panels_task())
+                    })?;
+                    if let Some(task) = panels_task {
+                        task.await.log_err();
+                    }
+
+                    multi_workspace.update(cx, |multi_workspace, window, cx| {
+                        multi_workspace.workspace().update(cx, |workspace, cx| {
+                            match name.as_str() {
+                                "blotter" => {
+                                    workspace.focus_panel::<blotter_panel::BlotterPanel>(window, cx);
+                                }
+                                "strategies" => {
+                                    workspace
+                                        .focus_panel::<strategies_panel::StrategiesPanel>(window, cx);
+                                }
+                                "schedules" => {
+                                    workspace
+                                        .focus_panel::<schedules_panel::SchedulesPanel>(window, cx);
+                                }
+                                "incidents" => {
+                                    workspace
+                                        .focus_panel::<incidents_panel::IncidentsPanel>(window, cx);
+                                }
+                                "runway" => {
+                                    workspace.focus_panel::<runway_rail::RunwayRail>(window, cx);
+                                }
+                                "runs" => {
+                                    workspace.focus_panel::<runs_dock::RunsDock>(window, cx);
+                                }
+                                "validation" => {
+                                    workspace
+                                        .focus_panel::<validation_rail::ValidationRail>(window, cx);
+                                }
+                                "connections" => {
+                                    workspace
+                                        .focus_panel::<auracle_onboarding::AuracleSettingsPanel>(
+                                            window, cx,
+                                        );
+                                }
+                                other => {
+                                    log::warn!(
+                                        "auracle://panel received an unknown panel name: {other}"
+                                    );
+                                }
                             }
                         });
                     })
@@ -1769,7 +1834,7 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zed", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "auracle", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///

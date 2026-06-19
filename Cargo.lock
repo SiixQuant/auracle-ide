@@ -1380,6 +1380,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_agent_commands"
+version = "0.1.0"
+dependencies = [
+ "agent_ui",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_connect"
 version = "0.1.0"
 dependencies = [
@@ -1393,6 +1409,47 @@ dependencies = [
  "serde",
  "serde_json",
  "ui",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_connections"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "editor",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "menu",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_onboarding"
+version = "0.1.0"
+dependencies = [
+ "agent_settings",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "db",
+ "editor",
+ "fs",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "language_model",
+ "log",
+ "menu",
+ "serde_json",
+ "settings",
+ "ui",
+ "util",
  "workspace",
 ]
 
@@ -10119,7 +10176,7 @@ dependencies = [
 [[package]]
 name = "libwebrtc"
 version = "0.3.26"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "cxx",
  "glib",
@@ -10217,7 +10274,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 [[package]]
 name = "livekit"
 version = "0.7.32"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "base64 0.22.1",
  "bmrng",
@@ -10243,7 +10300,7 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.4.14"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "base64 0.21.7",
  "futures-util",
@@ -10270,7 +10327,7 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.7.1"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "futures-util",
  "livekit-runtime",
@@ -10286,7 +10343,7 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.4.0"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -15561,6 +15618,7 @@ name = "runway_rail"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "auracle_agent_commands",
  "auracle_connect",
  "futures 0.3.32",
  "gpui",
@@ -15935,6 +15993,20 @@ dependencies = [
  "parking_lot",
  "rand 0.9.4",
  "web-time",
+]
+
+[[package]]
+name = "schedules_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -16622,6 +16694,7 @@ dependencies = [
  "agent_skills",
  "anyhow",
  "audio",
+ "auracle_connections",
  "codestral",
  "component",
  "copilot",
@@ -17477,6 +17550,20 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strategies_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
 
 [[package]]
 name = "streaming-iterator"
@@ -20946,7 +21033,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.23"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "cc",
  "cxx",
@@ -20960,7 +21047,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.13"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "anyhow",
  "fs2",
@@ -22919,7 +23006,10 @@ dependencies = [
  "askpass",
  "assets",
  "audio",
+ "auracle_agent_commands",
  "auracle_connect",
+ "auracle_connections",
+ "auracle_onboarding",
  "auracle_status",
  "auto_update",
  "auto_update_ui",
@@ -23024,6 +23114,7 @@ dependencies = [
  "rope",
  "runs_dock",
  "runway_rail",
+ "schedules_panel",
  "search",
  "semver",
  "serde",
@@ -23037,6 +23128,7 @@ dependencies = [
  "smol",
  "snippet_provider",
  "snippets_ui",
+ "strategies_panel",
  "svg_preview",
  "sysinfo 0.37.2",
  "system_specs",
