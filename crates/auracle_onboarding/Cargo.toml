@@ -14,17 +14,25 @@ workspace = true
 
 [dependencies]
 agent_settings.workspace = true
+anyhow.workspace = true
 auracle_connect.workspace = true
 auracle_connections.workspace = true
 db.workspace = true
 editor.workspace = true
 fs.workspace = true
+futures.workspace = true
 gpui.workspace = true
 http_client.workspace = true
 language_model.workspace = true
+log.workspace = true
 menu.workspace = true
 serde_json.workspace = true
 settings.workspace = true
 ui.workspace = true
 util.workspace = true
 workspace.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+language_model = { workspace = true, features = ["test-support"] }

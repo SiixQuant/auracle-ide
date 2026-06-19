@@ -1,15 +1,18 @@
-//! The first-run onboarding wizard — one modal, three setups.
+//! First-run onboarding — a non-blocking banner that deep-links to the
+//! native, inline settings surface.
 //!
 //! A new operator lands in the IDE with three things to wire up before
 //! anything works: a broker, a default AI model, and (optionally) GitHub.
-//! This modal walks them through all three in one frame.
+//! Rather than block them behind a modal, cold-start detection raises a
+//! dismissible toast ("Finish setup: connect a broker · pick an AI model ·
+//! sign in to GitHub") that opens the persistent [`settings_panel`] surface.
+//! The wizard modal is still reachable from the command palette / app menu
+//! via [`OpenOnboarding`] for operators who prefer the guided flow, but it
+//! never auto-opens.
 //!
-//! It auto-opens once, on first workspace start, only when nothing is set
-//! up yet (no broker connected AND no AI provider authenticated). A
-//! persisted "onboarding_dismissed" flag in the key-value store
-//! ([`OnboardingDismissed`]) ensures it never re-nags after the user
-//! finishes or skips it. It can always be re-opened from the command
-//! palette / app menu via the [`OpenOnboarding`] action.
+//! A persisted "onboarding_dismissed" flag in the key-value store
+//! ([`OnboardingDismissed`]) ensures the banner never re-nags after the
+//! operator finishes or dismisses it.
 //!
 //! Honesty laws baked in (mirroring `auracle_connections`):
 //!   * the broker step reuses `auracle_connections`' transport, Test, and
@@ -20,18 +23,26 @@
 //!   * the GitHub step shells `gh auth status` and `git config` for real;
 //!     it never claims a sign-in it can't observe.
 
+pub mod settings_panel;
+
+pub use settings_panel::{AuracleSettingsPanel, OpenConnections};
+
 use std::sync::Arc;
 
 use agent_settings::{AgentSettings, language_model_to_selection};
 use db::kvp::Dismissable;
 use gpui::{
-    AnyView, App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Global, SharedString,
-    Task, WeakEntity, Window, actions,
+    Action, AnyView, App, AsyncApp, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    Global, SharedString, Task, WeakEntity, Window, actions,
 };
-use language_model::{LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID};
+use language_model::{
+    ANTHROPIC_PROVIDER_ID, LanguageModel, LanguageModelProvider, LanguageModelRegistry,
+    ZED_CLOUD_PROVIDER_ID,
+};
 use settings::{Settings as _, update_settings_file};
 use ui::prelude::*;
-use workspace::{ModalView, Workspace};
+use workspace::notifications::NotificationId;
+use workspace::{ModalView, Toast, Workspace};
 
 use auracle_connections::{BrokerSummary, Capability, FieldMeta};
 
@@ -42,6 +53,11 @@ actions!(
         OpenOnboarding
     ]
 );
+
+/// Marker type for the first-run banner's notification id, so it can be
+/// dismissed/replaced deterministically (mirrors the `ThreadCopiedToast`
+/// pattern in agent_panel.rs).
+struct FirstRunBanner;
 
 /// Persisted flag so the wizard auto-opens only once. Stored in the
 /// key-value store via the [`Dismissable`] trait (same mechanism the agent
@@ -61,6 +77,7 @@ impl Global for FirstRunChecked {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(FirstRunChecked::default());
+    settings_panel::init(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         workspace.register_action(|workspace, _: &OpenOnboarding, window, cx| {
             let weak_workspace = workspace.weak_handle();
@@ -69,11 +86,11 @@ pub fn init(cx: &mut App) {
             });
         });
 
-        // First-run auto-open: at most once per launch, only when the
+        // First-run detection: at most once per launch, only when the
         // persisted flag isn't set, and only when nothing is set up yet. The
         // cold-start check is async (it calls the engine), so it runs in a
-        // spawned task that opens the modal back on the foreground if it
-        // confirms a cold start.
+        // spawned task. Instead of auto-opening a blocking modal, it raises a
+        // dismissible banner that deep-links to the native settings panel.
         let Some(window) = window else {
             return;
         };
@@ -81,6 +98,12 @@ pub fn init(cx: &mut App) {
             return;
         }
         cx.set_global(FirstRunChecked(true));
+
+        // Seed the shared agent default model from a saved provider key, if one
+        // exists. This runs regardless of whether the banner was dismissed —
+        // it reflects existing configuration, it doesn't onboard.
+        seed_shared_default_model(workspace, cx);
+
         if OnboardingDismissed::dismissed(cx) {
             return;
         }
@@ -95,18 +118,37 @@ pub fn init(cx: &mut App) {
                 if any_broker || any_model {
                     return;
                 }
+                // Cold start: raise the non-blocking banner. Mark the flag as
+                // dismissed so it shows once and never re-nags; the operator
+                // re-opens the surface from the command palette / app menu.
                 weak_workspace
-                    .update_in(cx, |workspace, window, cx| {
-                        let inner_weak = workspace.weak_handle();
-                        workspace.toggle_modal(window, cx, |window, cx| {
-                            OnboardingWizard::new(inner_weak, window, cx)
-                        });
+                    .update(cx, |workspace, cx| {
+                        OnboardingDismissed::set_dismissed(true, cx);
+                        show_first_run_banner(workspace, cx);
                     })
                     .ok();
             })
             .detach();
     })
     .detach();
+}
+
+/// Raise the dismissible first-run banner. Mirrors the toast pattern in
+/// `agent_panel.rs` (`workspace.show_toast(Toast::new(NotificationId::unique::
+/// <Marker>(), msg).on_click(...))`). The `on_click` closure deep-links to the
+/// native settings panel via the [`OpenConnections`] action — the same path
+/// the command palette uses.
+fn show_first_run_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
+    workspace.show_toast(
+        Toast::new(
+            NotificationId::unique::<FirstRunBanner>(),
+            "Finish setup: connect a broker · pick an AI model · sign in to GitHub.",
+        )
+        .on_click("Open setup", |window, cx| {
+            window.dispatch_action(OpenConnections.boxed_clone(), cx);
+        }),
+        cx,
+    );
 }
 
 /// True if the engine reports at least one broker with `status == "connected"`.
@@ -125,6 +167,99 @@ fn any_ai_provider_authenticated(cx: &App) -> bool {
         .visible_providers()
         .iter()
         .any(|provider| provider.is_authenticated(cx) && provider.id() != ZED_CLOUD_PROVIDER_ID)
+}
+
+/// Seed the shared agent default model on a cold IDE start.
+///
+/// "Configure once, reflected everywhere": once an operator (or the engine's
+/// key-provisioning handoff) has saved a provider API key, the agent surfaces
+/// should pick it up without the operator also hand-editing
+/// `agent.default_model`. This fills that slot from the engine's designated
+/// provider the first time a workspace opens, but only while it is still empty
+/// — it never overrides a model the operator chose.
+///
+/// The subtlety this guards against: `is_authenticated` is backed by
+/// `ApiKeyState::has_key`, which only becomes true once an *async* keychain
+/// read has completed (see `api_key.rs` `load_if_needed`). During the
+/// cold-start window it reports `false` even for a provider that does have a
+/// saved key. Reading it synchronously here would make the seed a
+/// non-deterministic no-op and silently drop a valid default, so
+/// [`resolve_seed_model`] drives each candidate's `authenticate` (which runs
+/// `load_if_needed`) to completion before consulting `is_authenticated`.
+fn seed_shared_default_model(workspace: &Workspace, cx: &mut Context<Workspace>) {
+    if AgentSettings::get_global(cx).default_model.is_some() {
+        return;
+    }
+    let fs = workspace.project().read(cx).fs().clone();
+
+    // Visible, non-cloud providers, with the engine's designated default
+    // provider tried first so a configured Claude key wins over any other
+    // saved credentials.
+    let mut candidates: Vec<Arc<dyn LanguageModelProvider>> = LanguageModelRegistry::read_global(cx)
+        .visible_providers()
+        .into_iter()
+        .filter(|provider| provider.id() != ZED_CLOUD_PROVIDER_ID)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    candidates.sort_by_key(|provider| u8::from(provider.id() != ANTHROPIC_PROVIDER_ID));
+
+    cx.spawn(async move |_workspace, cx| {
+        let Some((provider, model)) = resolve_seed_model(candidates, cx).await else {
+            return;
+        };
+        cx.update(|cx| {
+            // Re-check under the write so we never clobber a default the
+            // operator chose while the keychain read was in flight.
+            let current = AgentSettings::get_global(cx).default_model.clone();
+            let selection = language_model_to_selection(&model, current.as_ref());
+            update_settings_file(fs, cx, move |settings, _cx| {
+                let agent = settings.agent.get_or_insert_default();
+                if agent.default_model.is_none() {
+                    agent.default_model = Some(selection);
+                }
+            });
+            log::info!(
+                "Seeded shared default agent model from {} · {}",
+                provider.name().0,
+                model.id().0
+            );
+        });
+    })
+    .detach();
+}
+
+/// Resolve the provider/model to seed as the shared default, or `None` when no
+/// candidate is authenticated. Each candidate's credentials are loaded via
+/// `authenticate` (which drives `ApiKeyState::load_if_needed`) *before* its
+/// `is_authenticated` is read, so a provider holding a saved-but-not-yet-loaded
+/// key is seeded rather than skipped. Returns the first authenticated
+/// candidate; the shared default is singular.
+async fn resolve_seed_model(
+    candidates: Vec<Arc<dyn LanguageModelProvider>>,
+    cx: &mut AsyncApp,
+) -> Option<(Arc<dyn LanguageModelProvider>, Arc<dyn LanguageModel>)> {
+    for provider in candidates {
+        // Drive the keychain read to completion. An auth failure here just
+        // means this provider has no saved key, so it isn't a seed candidate —
+        // an expected cold-start outcome that we deliberately don't surface.
+        cx.update(|cx| provider.authenticate(cx)).await.ok();
+        let resolved = cx.update(|cx| {
+            if !provider.is_authenticated(cx) {
+                return None;
+            }
+            provider
+                .default_model(cx)
+                .or_else(|| provider.recommended_models(cx).first().cloned())
+                .or_else(|| provider.provided_models(cx).first().cloned())
+                .map(|model| (provider.clone(), model))
+        });
+        if resolved.is_some() {
+            return resolved;
+        }
+    }
+    None
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -963,5 +1098,143 @@ impl Render for OnboardingWizard {
                             }),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use gpui::TestAppContext;
+    use language_model::{
+        AuthenticateError, ConfigurationViewTargetAgent, LanguageModelProviderId,
+        LanguageModelProviderName, fake_provider::FakeLanguageModel,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Models the cold-start keychain race: `is_authenticated` stays `false`
+    /// until `authenticate` (the async keychain read) has run, exactly like a
+    /// real provider whose saved key is present in the keychain but whose
+    /// `ApiKeyState::load_status` has not loaded yet.
+    struct DeferredKeyProvider {
+        loaded: Arc<AtomicBool>,
+        has_saved_key: bool,
+        model: Arc<dyn LanguageModel>,
+    }
+
+    impl LanguageModelProvider for DeferredKeyProvider {
+        fn id(&self) -> LanguageModelProviderId {
+            ANTHROPIC_PROVIDER_ID
+        }
+
+        fn name(&self) -> LanguageModelProviderName {
+            LanguageModelProviderName::from("Deferred".to_string())
+        }
+
+        fn default_model(&self, _cx: &App) -> Option<Arc<dyn LanguageModel>> {
+            Some(self.model.clone())
+        }
+
+        fn default_fast_model(&self, _cx: &App) -> Option<Arc<dyn LanguageModel>> {
+            Some(self.model.clone())
+        }
+
+        fn provided_models(&self, _cx: &App) -> Vec<Arc<dyn LanguageModel>> {
+            vec![self.model.clone()]
+        }
+
+        fn is_authenticated(&self, _cx: &App) -> bool {
+            self.loaded.load(Ordering::SeqCst)
+        }
+
+        fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>> {
+            let loaded = self.loaded.clone();
+            let has_saved_key = self.has_saved_key;
+            cx.background_spawn(async move {
+                if has_saved_key {
+                    // The keychain read completed and found a key.
+                    loaded.store(true, Ordering::SeqCst);
+                    Ok(())
+                } else {
+                    Err(AuthenticateError::CredentialsNotFound)
+                }
+            })
+        }
+
+        fn configuration_view(
+            &self,
+            _target_agent: ConfigurationViewTargetAgent,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> AnyView {
+            unimplemented!("not exercised by the seed path")
+        }
+
+        fn reset_credentials(&self, _cx: &mut App) -> Task<Result<()>> {
+            Task::ready(Ok(()))
+        }
+    }
+
+    fn seed_model() -> Arc<dyn LanguageModel> {
+        Arc::new(FakeLanguageModel::with_id_and_thinking(
+            "anthropic",
+            "claude-seed",
+            "Claude Seed",
+            false,
+        ))
+    }
+
+    /// A provider with a saved keychain key whose `load_status` is not yet
+    /// loaded must still seed once its credential load completes — the bug was
+    /// that the synchronous `is_authenticated` gate read `false` in this window
+    /// and dropped the default.
+    #[gpui::test]
+    async fn test_seed_awaits_credential_load(cx: &mut TestAppContext) {
+        let loaded = Arc::new(AtomicBool::new(false));
+        let provider: Arc<dyn LanguageModelProvider> = Arc::new(DeferredKeyProvider {
+            loaded: loaded.clone(),
+            has_saved_key: true,
+            model: seed_model(),
+        });
+
+        // Cold start: the key is saved but its load hasn't completed, so the
+        // synchronous gate the buggy version relied on reads `false`.
+        assert!(!cx.update(|cx| provider.is_authenticated(cx)));
+
+        let candidates = vec![provider.clone()];
+        let resolved = cx
+            .spawn(|mut cx| async move { resolve_seed_model(candidates, &mut cx).await })
+            .await;
+
+        let (seeded_provider, seeded_model) = resolved
+            .expect("a provider with a saved key must seed once its keychain load completes");
+        assert_eq!(seeded_provider.id(), ANTHROPIC_PROVIDER_ID);
+        assert_eq!(seeded_model.id().0.as_ref(), "claude-seed");
+        // Awaiting `authenticate` drove `load_if_needed` to completion.
+        assert!(cx.update(|cx| provider.is_authenticated(cx)));
+    }
+
+    /// A provider with no saved key is never seeded — `resolve_seed_model`
+    /// awaits the load, finds nothing, and skips it rather than seeding a
+    /// model that can't be used.
+    #[gpui::test]
+    async fn test_seed_skips_provider_without_key(cx: &mut TestAppContext) {
+        let loaded = Arc::new(AtomicBool::new(false));
+        let provider: Arc<dyn LanguageModelProvider> = Arc::new(DeferredKeyProvider {
+            loaded: loaded.clone(),
+            has_saved_key: false,
+            model: seed_model(),
+        });
+
+        let candidates = vec![provider.clone()];
+        let resolved = cx
+            .spawn(|mut cx| async move { resolve_seed_model(candidates, &mut cx).await })
+            .await;
+
+        assert!(
+            resolved.is_none(),
+            "a provider with no saved key must not be seeded"
+        );
+        assert!(!cx.update(|cx| provider.is_authenticated(cx)));
     }
 }

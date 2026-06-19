@@ -1100,10 +1100,10 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                         .focus_panel::<validation_rail::ValidationRail>(window, cx);
                                 }
                                 "connections" => {
-                                    window.dispatch_action(
-                                        Box::new(auracle_connections::OpenBrokerWizard),
-                                        cx,
-                                    );
+                                    workspace
+                                        .focus_panel::<auracle_onboarding::AuracleSettingsPanel>(
+                                            window, cx,
+                                        );
                                 }
                                 other => {
                                     log::warn!(

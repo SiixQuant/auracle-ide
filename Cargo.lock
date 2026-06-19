@@ -1430,6 +1430,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_onboarding"
+version = "0.1.0"
+dependencies = [
+ "agent_settings",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "db",
+ "editor",
+ "fs",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "language_model",
+ "log",
+ "menu",
+ "serde_json",
+ "settings",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_status"
 version = "0.1.0"
 dependencies = [
@@ -22985,6 +23009,7 @@ dependencies = [
  "auracle_agent_commands",
  "auracle_connect",
  "auracle_connections",
+ "auracle_onboarding",
  "auracle_status",
  "auto_update",
  "auto_update_ui",
