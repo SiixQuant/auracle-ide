@@ -593,12 +593,10 @@ impl ConfigurationView {
         let load_task = Some(cx.spawn({
             let state = state.clone();
             async move |this, cx| {
-                if let Some(task) = state
+                state
                     .update(cx, |state, cx| state.refresh_health(cx))
-                    .log_err()
-                {
-                    task.await.log_err();
-                }
+                    .await
+                    .log_err();
                 this.update(cx, |this, cx| {
                     this.load_task = None;
                     cx.notify();
