@@ -52,10 +52,12 @@ const HEALTH_PATH: &str = "/ui/api/agent/health";
 /// The DeepSeek model ids the gateway exposes. The gateway resolves the actual
 /// upstream model at build time (see PRD "model naming drift"); these are the
 /// labels the IDE offers, and the chosen id is passed through to the gateway as
-/// the requested `model`. Default is the "pro" model; the "flash" model is the
-/// fast option used for summaries/inline.
-const DEFAULT_MODEL_ID: &str = "deepseek-v4-pro";
-const FAST_MODEL_ID: &str = "deepseek-v4-flash";
+/// the requested `model`. The engine gateway resolves the concrete DeepSeek
+/// model and can override it via AURACLE_DEEPSEEK_MODEL, so a single tool-capable
+/// model is exposed here; deepseek-reasoner is intentionally not offered because
+/// it does not support function calling, which the agent requires.
+const DEFAULT_MODEL_ID: &str = "deepseek-chat";
+const FAST_MODEL_ID: &str = "deepseek-chat";
 
 #[derive(Clone, Copy)]
 struct AgentModel {
@@ -65,20 +67,12 @@ struct AgentModel {
     max_output_tokens: u64,
 }
 
-const MODELS: &[AgentModel] = &[
-    AgentModel {
-        id: DEFAULT_MODEL_ID,
-        display_name: "Auracle Agent (Pro)",
-        max_tokens: 1_000_000,
-        max_output_tokens: 384_000,
-    },
-    AgentModel {
-        id: FAST_MODEL_ID,
-        display_name: "Auracle Agent (Flash)",
-        max_tokens: 1_000_000,
-        max_output_tokens: 384_000,
-    },
-];
+const MODELS: &[AgentModel] = &[AgentModel {
+    id: DEFAULT_MODEL_ID,
+    display_name: "Auracle Agent",
+    max_tokens: 65_536,
+    max_output_tokens: 8_192,
+}];
 
 fn model_by_id(id: &str) -> AgentModel {
     MODELS

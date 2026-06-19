@@ -17,7 +17,7 @@
   "agent": {
     "default_model": {
       "provider": "auracle-agent",
-      "model": "deepseek-v4-pro",
+      "model": "deepseek-chat",
     },
   },
 }
