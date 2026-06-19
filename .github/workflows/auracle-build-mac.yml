@@ -7,9 +7,22 @@
 #
 # No signing/notarization secrets are configured here, so script/bundle-mac
 # degrades to an ad-hoc-signed (unsigned) .dmg automatically. First launch:
-# right-click the app > Open to clear Gatekeeper. A signed/notarized public
-# build needs an Apple Developer cert + notarization secrets (not required
-# for internal builds).
+# right-click the app > Open to clear Gatekeeper.
+#
+# INTEGRITY: every build emits a SHA-256 checksum next to the .dmg
+# (Auracle-aarch64.dmg.sha256, standard `shasum -a 256` format). The Auracle
+# launcher verifies the downloaded image against this published checksum
+# before it installs an update, so the checksum MUST ship with the .dmg in
+# the release — this workflow attaches both together (see the release step
+# below) precisely so it can't be forgotten.
+#
+# SIGNING (stronger, not yet enabled): a checksum proves the bytes match
+# what this CI built, but it is served from the same GitHub release as the
+# .dmg, so it is not a substitute for code signing. The stronger guarantee
+# is an Apple Developer Application cert + notarization (signed/stapled
+# .dmg, verifiable offline via Gatekeeper). That needs signing secrets
+# (Apple cert + notarization credentials) wired into script/bundle-mac;
+# until then the SHA-256 is the integrity floor.
 name: Build Auracle IDE (macOS)
 
 # Manual trigger only — Mac CI minutes are expensive, so we dispatch this
@@ -17,10 +30,23 @@ name: Build Auracle IDE (macOS)
 # than on every push.
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Optional. If set (e.g. auracle-v0.1.1), attach the built .dmg and
+          its .sha256 checksum to that GitHub Release — creating it as a
+          draft if it doesn't exist yet. Leave blank to only upload build
+          artifacts.
+        required: false
+        default: ""
 
 jobs:
   bundle_mac_aarch64:
     runs-on: macos-14
+    # Needed only by the optional release step (gh release create/upload).
+    # The artifact-only path doesn't write to the repo.
+    permissions:
+      contents: write
     # A cold full Zed/GPUI release build (incl. the webrtc C++) runs ~90-120 min
     # on a GitHub Mac runner; 90 was too tight (it timed out mid-final-crates).
     timeout-minutes: 180
@@ -65,9 +91,45 @@ jobs:
           echo "SDK: $(xcrun --show-sdk-version)"; xcrun -f metal && echo "metal OK"
       - name: Bundle macOS app (aarch64, unsigned)
         run: ./script/bundle-mac aarch64-apple-darwin
-      - name: Upload .dmg artifact
+      # Emit the SHA-256 the launcher verifies before installing. Standard
+      # `shasum -a 256` output (`<digest>  Auracle-aarch64.dmg`); run from the
+      # .dmg's directory so the recorded name is the bare filename, matching
+      # the sidecar the launcher fetches (<dmg>.sha256).
+      - name: Compute SHA-256 checksum
+        working-directory: target/aarch64-apple-darwin/release
+        run: |
+          set -euo pipefail
+          shasum -a 256 Auracle-aarch64.dmg | tee Auracle-aarch64.dmg.sha256
+      - name: Upload .dmg + checksum artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: Auracle-IDE-aarch64-dmg
-          path: target/aarch64-apple-darwin/release/Auracle-aarch64.dmg
+          path: |
+            target/aarch64-apple-darwin/release/Auracle-aarch64.dmg
+            target/aarch64-apple-darwin/release/Auracle-aarch64.dmg.sha256
           if-no-files-found: error
+      # When dispatched with a release_tag, attach BOTH the .dmg and its
+      # .sha256 to the release in one step so the checksum is never published
+      # without its image. Uploads with --clobber if the release exists;
+      # otherwise creates it as a draft for the maintainer to review + publish
+      # (the launcher only ever picks non-draft releases).
+      - name: Attach .dmg + checksum to the release
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target/aarch64-apple-darwin/release
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release_tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag exists — uploading assets (clobbering old copies)."
+            gh release upload "$tag" \
+              Auracle-aarch64.dmg Auracle-aarch64.dmg.sha256 --clobber
+          else
+            echo "Release $tag not found — creating it as a draft with both assets."
+            gh release create "$tag" \
+              Auracle-aarch64.dmg Auracle-aarch64.dmg.sha256 \
+              --draft \
+              --title "Auracle IDE ${tag#auracle-v}" \
+              --generate-notes
+          fi
