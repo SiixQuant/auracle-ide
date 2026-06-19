@@ -5,9 +5,7 @@ use client::{Client, UserStore};
 use collections::{HashMap, HashSet};
 use credentials_provider::CredentialsProvider;
 use gpui::{App, Context, Entity};
-use language_model::{
-    ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID,
-};
+use language_model::{ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry};
 use provider::deepseek::DeepSeekLanguageModelProvider;
 
 pub mod extension;
@@ -18,6 +16,7 @@ pub use crate::extension::init_proxy as init_extension_proxy;
 
 use crate::provider::anthropic::AnthropicLanguageModelProvider;
 use crate::provider::anthropic_compatible::AnthropicCompatibleLanguageModelProvider;
+use crate::provider::auracle::AuracleAgentLanguageModelProvider;
 use crate::provider::bedrock::BedrockLanguageModelProvider;
 use crate::provider::cloud::CloudLanguageModelProvider;
 use crate::provider::copilot_chat::CopilotChatLanguageModelProvider;
@@ -39,6 +38,12 @@ pub use crate::settings::*;
 /// only BYO-key providers (Anthropic/OpenAI/Google/etc.) are registered. Flip
 /// this to `true` only if a hosted-inference backend is ever stood up.
 const REGISTER_HOSTED_CLOUD_PROVIDER: bool = false;
+
+/// The native default provider's id. Must match
+/// [`crate::provider::auracle`]'s `PROVIDER_ID`; the fallback-model logic looks
+/// the provider up by this id to prefer it once the engine connection is saved.
+const AURACLE_AGENT_PROVIDER_ID: LanguageModelProviderId =
+    LanguageModelProviderId::new("auracle-agent");
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
     let credentials_provider = client.credentials_provider();
@@ -148,21 +153,21 @@ pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
 /// Recomputes and sets the [`LanguageModelRegistry`]'s environment fallback
 /// model based on currently authenticated providers.
 ///
-/// Prefers the Zed cloud provider so that, once the user is signed in, we
-/// always pick a Zed-hosted model over models from other authenticated
-/// providers in the environment. If the Zed cloud provider is authenticated
-/// but hasn't finished loading its models yet, we don't fall back to another
-/// provider to avoid flickering between providers during sign in.
+/// Prefers the native Auracle Agent provider so that, once the operator's
+/// engine connection is saved, we always pick the engine-backed agent over
+/// models from other authenticated providers in the environment. This is the
+/// seam the hosted Zed-cloud provider's preference used to occupy; the Auracle
+/// Agent now takes it.
 pub fn update_environment_fallback_model(cx: &mut App) {
     let registry = LanguageModelRegistry::global(cx);
     let fallback_model = {
         let registry = registry.read(cx);
-        let cloud_provider = registry.provider(&ZED_CLOUD_PROVIDER_ID);
-        if cloud_provider
+        let auracle_provider = registry.provider(&AURACLE_AGENT_PROVIDER_ID);
+        if auracle_provider
             .as_ref()
             .is_some_and(|provider| provider.is_authenticated(cx))
         {
-            cloud_provider.and_then(|provider| {
+            auracle_provider.and_then(|provider| {
                 let model = provider
                     .default_model(cx)
                     .or_else(|| provider.recommended_models(cx).first().cloned())?;
@@ -281,6 +286,18 @@ fn register_language_model_providers(
             cx,
         );
     }
+    // The native default: the "Auracle Agent" takes the slot the hosted
+    // Zed-cloud provider vacated. It routes completions through the operator's
+    // own engine gateway over loopback (no hosted inference, no second key
+    // entry). Registered first so it leads the panel's provider list; the
+    // frontier BYO-key providers below stay available unchanged.
+    registry.register_provider(
+        Arc::new(AuracleAgentLanguageModelProvider::new(
+            client.http_client(),
+            cx,
+        )),
+        cx,
+    );
     registry.register_provider(
         Arc::new(AnthropicLanguageModelProvider::new(
             client.http_client(),

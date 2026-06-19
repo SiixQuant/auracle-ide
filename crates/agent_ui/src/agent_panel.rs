@@ -4979,7 +4979,13 @@ impl EventEmitter<AgentPanelEvent> for AgentPanel {}
 
 impl Panel for AgentPanel {
     fn persistent_name() -> &'static str {
-        "AgentPanel"
+        // User-visible panel identity. Renamed from "AgentPanel" to "Auracle
+        // Agent"; this invalidates the stored dock entry once (a one-time
+        // panel-layout reset, accepted per PRD #169). `panel_key()` is kept as
+        // `AGENT_PANEL_KEY` so other stored agent state survives, and the
+        // internal `agent_ui::AgentPanel::*` action namespace is unchanged so
+        // keybindings keep working.
+        "Auracle Agent"
     }
 
     fn panel_key() -> &'static str {
