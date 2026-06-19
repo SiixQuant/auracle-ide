@@ -7,9 +7,9 @@
   // - "light": Use the theme indicated by the "light" field
   // - "dark": Use the theme indicated by the "dark" field
   "theme": {
-    "mode": "system",
-    "light": "One Light",
-    "dark": "One Dark",
+    "mode": "dark",
+    "light": "Auracle Light",
+    "dark": "Auracle Dark",
   },
   "icon_theme": "Zed (Default)",
   // The name of a base set of key bindings to use.
@@ -62,6 +62,10 @@
   "ui_font_features": {
     // Disable ligatures:
     "calt": false,
+    // Tabular figures everywhere financial numbers can appear — a
+    // no-op for the bundled UI font (tabular by design), insurance
+    // against user font overrides.
+    "tnum": true,
   },
   // The weight of the UI font in standard CSS units from 100 to 900.
   "ui_font_weight": 400,
@@ -519,10 +523,12 @@
     "show_onboarding_banner": true,
     // Whether to show user picture in the titlebar.
     "show_user_picture": true,
-    // Whether to show the user menu in the titlebar.
-    "show_user_menu": true,
+    // Whether to show the user menu in the titlebar. Auracle white-label:
+    // off — the Zed account/avatar dropdown opens zed.dev, which Auracle
+    // does not use (Auracle connects to its own engine, not a Zed account).
+    "show_user_menu": false,
     // Whether to show the sign in button in the titlebar.
-    "show_sign_in": true,
+    "show_sign_in": false,
     // Whether to show the menus in the titlebar.
     "show_menus": false,
     // The layout of window control buttons in the title bar (Linux only).
@@ -1035,7 +1041,7 @@
     // The default model to use when creating new threads.
     "default_model": {
       // The provider to use.
-      "provider": "zed.dev",
+      "provider": "anthropic",
       // The model to use.
       "model": "claude-sonnet-4",
       // Whether thinking is enabled.
@@ -1124,8 +1130,33 @@
     },
     // When enabled, show voting thumbs for feedback on agent edits.
     "enable_feedback": true,
-    "default_profile": "write",
+    "default_profile": "auracle",
     "profiles": {
+      "auracle": {
+        // Auracle fork: the novice-first quant profile. Turns the
+        // Auracle engine's MCP tools ON (backtest, schedules,
+        // securities, deploy-paper, …) and keeps a focused file-and-
+        // read built-in set, leaving heavier code-navigation, web
+        // search, terminal and sub-agents off so a first-time user's
+        // Agent Panel is the quant workflow, not a general IDE.
+        "name": "Auracle",
+        "enable_all_context_servers": true,
+        "tools": {
+          "read_file": true,
+          "edit_file": true,
+          "write_file": true,
+          "create_directory": true,
+          "find_path": true,
+          "list_directory": true,
+          "grep": true,
+          "diagnostics": true,
+          "fetch": true,
+          "create_thread": true,
+          "update_plan": true,
+          "update_title": true,
+          "list_agents_and_models": true,
+        },
+      },
       "write": {
         "name": "Write",
         "enable_all_context_servers": true,
@@ -1492,9 +1523,9 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true,
+    "metrics": false,
     // Allow sending requests to Anthropic models that cannot be offered with
     // Zero Data Retention
     "anthropic_retention": false,
@@ -1503,9 +1534,10 @@
   //
   // Default: false
   "disable_ai": false,
-  // Automatically update Zed. This setting may be ignored on Linux if
-  // installed through a package manager.
-  "auto_update": true,
+  // Automatically update the IDE. Disabled by default: the Auracle launcher
+  // manages IDE updates from GitHub Releases. This setting may be ignored on
+  // Linux if installed through a package manager.
+  "auto_update": false,
   // How to render LSP `textDocument/documentColor` colors in the editor.
   //
   // Possible values:
@@ -1683,8 +1715,10 @@
   //      "load_direnv": "disabled"
   "load_direnv": "direct",
   "edit_predictions": {
-    // Which edit prediction provider to use.
-    "provider": "zed",
+    // Which edit prediction provider to use. Auracle defaults this off ("none")
+    // because the Zed-hosted edit-prediction (Zeta) service is not available;
+    // users can opt into a BYO provider (e.g. "copilot", "codestral", "ollama").
+    "provider": "none",
     // A list of globs representing files that edit predictions should be disabled for.
     // There's a sensible default list of globs already included.
     // Any addition to this list will be merged with the default list.
@@ -2071,9 +2105,7 @@
   //
   // If you don't want any of these extensions, add this field to your settings
   // and change the value to `false`.
-  "auto_install_extensions": {
-    "html": true,
-  },
+  "auto_install_extensions": {},
   // The capabilities granted to extensions.
   //
   // This list can be customized to restrict what extensions are able to do.
@@ -2572,9 +2604,12 @@
     // Delay in milliseconds before showing the which-key popup.
     "delay_ms": 1000,
   },
-  // The server to connect to. If the environment variable
-  // ZED_SERVER_URL is set, it will override this setting.
-  "server_url": "https://zed.dev",
+  // The cloud server to connect to. Auracle white-label: pointed away from
+  // zed.dev so the account / trial / upgrade / telemetry calls (all derived
+  // from this via zed_urls::*) do NOT phone home to Zed. Auracle has no
+  // cloud account backend — the IDE connects to the local Auracle engine via
+  // auracle_connect, not this. Point at a real Auracle cloud URL if one ships.
+  "server_url": "https://ide.aurapointcapital.com",
   // Settings overrides to use when using Zed Preview.
   // Mostly useful for developers who are managing multiple instances of Zed.
   "preview": {

@@ -1643,7 +1643,7 @@ impl ConversationView {
                         } else {
                             "New message"
                         },
-                        IconName::ZedAssistant,
+                        IconName::AuracleAssistant,
                         window,
                         cx,
                     );
@@ -2353,7 +2353,7 @@ impl ConversationView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (heading_label, description_label) = (
-            format!("Upgrade {} to work with Zed", self.agent.agent_id()),
+            format!("Upgrade {} to work with Auracle", self.agent.agent_id()),
             if version.is_empty() {
                 format!(
                     "Currently using {}, which does not report a valid --version",
@@ -5123,7 +5123,7 @@ pub(crate) mod tests {
         C: 'static + AgentConnection + Send + Clone,
     {
         fn logo(&self) -> ui::IconName {
-            ui::IconName::ZedAgent
+            ui::IconName::AuracleAgent
         }
 
         fn agent_id(&self) -> AgentId {
@@ -5199,7 +5199,7 @@ pub(crate) mod tests {
 
     impl AgentServer for FlakyAgentServer {
         fn logo(&self) -> ui::IconName {
-            ui::IconName::ZedAgent
+            ui::IconName::AuracleAgent
         }
 
         fn agent_id(&self) -> AgentId {

@@ -15,6 +15,11 @@ members = [
     "crates/askpass",
     "crates/assets",
     "crates/audio",
+    "crates/auracle_agent_commands",
+    "crates/auracle_connect",
+    "crates/auracle_connections",
+    "crates/auracle_onboarding",
+    "crates/auracle_status",
     "crates/auto_update",
     "crates/auto_update_helper",
     "crates/auto_update_ui",
@@ -105,6 +110,8 @@ members = [
     "crates/http_client_tls",
     "crates/icons",
     "crates/image_viewer",
+    "crates/blotter_panel",
+    "crates/incidents_panel",
     "crates/input_latency_ui",
     "crates/inspector_ui",
     "crates/install_cli",
@@ -170,6 +177,11 @@ members = [
     "crates/reqwest_client",
     "crates/rope",
     "crates/rpc",
+    "crates/runs_dock",
+    "crates/runway_rail",
+    "crates/schedules_panel",
+    "crates/strategies_panel",
+    "crates/validation_rail",
     "crates/sandbox",
     "crates/scheduler",
     "crates/schema_generator",
@@ -428,6 +440,19 @@ reqwest_client = { path = "crates/reqwest_client" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", features = ["wav", "playback", "wav_output", "recording"] }
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
+auracle_agent_commands = { path = "crates/auracle_agent_commands" }
+auracle_connect = { path = "crates/auracle_connect" }
+auracle_connections = { path = "crates/auracle_connections" }
+auracle_onboarding = { path = "crates/auracle_onboarding" }
+auracle_status = { path = "crates/auracle_status" }
+blotter_panel = { path = "crates/blotter_panel" }
+incidents_panel = { path = "crates/incidents_panel" }
+runs_dock = { path = "crates/runs_dock" }
+runway_rail = { path = "crates/runway_rail" }
+schedules_panel = { path = "crates/schedules_panel" }
+strategies_panel = { path = "crates/strategies_panel" }
+validation_rail = { path = "crates/validation_rail" }
+skill_creator = { path = "crates/skill_creator" }
 scheduler = { path = "crates/scheduler" }
 sandbox = { path = "crates/sandbox" }
 search = { path = "crates/search" }
@@ -459,6 +484,7 @@ terminal_view = { path = "crates/terminal_view" }
 text = { path = "crates/text" }
 theme = { path = "crates/theme" }
 theme_extension = { path = "crates/theme_extension" }
+theme_importer = { path = "crates/theme_importer" }
 theme_settings = { path = "crates/theme_settings" }
 theme_selector = { path = "crates/theme_selector" }
 time_format = { path = "crates/time_format" }
@@ -895,13 +921,13 @@ features = [
 [patch.crates-io]
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+notify = { git = "https://github.com/zed-industries/notify.git", rev = "6566ae63331ffd1f2025b18dc00c3049fb8588c9" }
+notify-types = { git = "https://github.com/zed-industries/notify.git", rev = "6566ae63331ffd1f2025b18dc00c3049fb8588c9" }
 windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
 calloop = { git = "https://github.com/zed-industries/calloop" }
-livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
-libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
-notify = { git = "https://github.com/zed-industries/notify", rev = "faecbc33db4f59313e5225ef766bfd9e54a54cfd" }
-notify-types = { git = "https://github.com/zed-industries/notify", rev = "faecbc33db4f59313e5225ef766bfd9e54a54cfd" }
-webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
+livekit = { git = "https://github.com/SiixQuant/livekit-rust-sdks", rev = "cb68aa48b4722c4428efa989b52afaf1296609bb" }
+libwebrtc = { git = "https://github.com/SiixQuant/livekit-rust-sdks", rev = "cb68aa48b4722c4428efa989b52afaf1296609bb" }
+webrtc-sys = { git = "https://github.com/SiixQuant/livekit-rust-sdks", rev = "cb68aa48b4722c4428efa989b52afaf1296609bb" }
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -984,11 +1010,27 @@ zed_actions = { codegen-units = 1 }
 
 [profile.release]
 debug = "limited"
+# Strip the symbol table from release binaries — it's ~90 MB of the
+# Mach-O on this workspace, so stripping shrinks the app and speeds
+# launch (less to map/page in). Trade-off: crash reports are no longer
+# symbolicated locally; remove this line if you need that back.
+strip = "symbols"
 lto = "thin"
 codegen-units = 1
+# Shrink __text under the macOS linker's +/-128MB branch range (the zed bin
+# overran it -> "ld: B/BL out of range"). panic="abort" drops the eh_frame/
+# unwind tables (also clears the >16MB __eh_frame warning); opt-level="z"
+# optimizes for size. No production code relies on catch_unwind, so
+# abort-on-panic is safe for the bundle.
+panic = "abort"
+opt-level = "z"
 
+# The zed binary builds at codegen-units = 1 (inherited) for full
+# cross-function optimization + dead-code elimination. The previous
+# codegen-units = 16 build-speed shortcut bloated __text past the macOS
+# linker's +/-128MB branch range (ld: B/BL out of range at bundle time).
 [profile.release.package]
-zed = { codegen-units = 16 }
+zed = { codegen-units = 1 }
 
 [profile.release-fast]
 inherits = "release"

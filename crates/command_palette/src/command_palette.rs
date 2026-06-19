@@ -695,6 +695,14 @@ impl PickerDelegate for CommandPaletteDelegate {
 }
 
 pub fn humanize_action_name(name: &str) -> String {
+    // Show the fork's brand in the palette ("auracle: …") while leaving the
+    // action's wire identity ("zed::…") untouched. That identity is the exact
+    // key the action registry and every keymap file look up by string, so it
+    // must never be rewritten here — only the human-facing display prefix is.
+    let rebranded = name
+        .strip_prefix("zed::")
+        .map(|rest| format!("auracle::{rest}"));
+    let name = rebranded.as_deref().unwrap_or(name);
     let chars = name.chars().collect::<Vec<_>>();
     let capacity = name.len() + chars.iter().filter(|c| c.is_uppercase()).count();
     let mut result = String::with_capacity(capacity);

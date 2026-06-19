@@ -283,7 +283,7 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
     }
 
     fn icon(&self) -> IconOrSvg {
-        IconOrSvg::Icon(IconName::AiZed)
+        IconOrSvg::Icon(IconName::AiAuracle)
     }
 
     fn default_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
@@ -398,30 +398,30 @@ impl RenderOnce for ZedAiConfiguration {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let (subscription_text, has_paid_plan) = match self.plan {
             Some(Plan::ZedPro) => (
-                "You have access to Zed's hosted models through your Pro subscription.",
+                "You have access to Auracle's hosted models through your Pro subscription.",
                 true,
             ),
             Some(Plan::ZedProTrial) => (
-                "You have access to Zed's hosted models through your Pro trial.",
+                "You have access to Auracle's hosted models through your Pro trial.",
                 false,
             ),
             Some(Plan::ZedStudent) => (
-                "You have access to Zed's hosted models through your Student subscription.",
+                "You have access to Auracle's hosted models through your Student subscription.",
                 true,
             ),
             Some(Plan::ZedBusiness) => (
                 if self.is_zed_model_provider_enabled {
-                    "You have access to Zed's hosted models through your organization."
+                    "You have access to Auracle's hosted models through your organization."
                 } else {
-                    "Zed's hosted models are disabled by your organization's configuration."
+                    "Auracle's hosted models are disabled by your organization's configuration."
                 },
                 true,
             ),
             Some(Plan::ZedFree) | None => (
                 if self.eligible_for_trial {
-                    "Subscribe for access to Zed's hosted models. Start with a 14 day free trial."
+                    "Subscribe for access to Auracle's hosted models. Start with a 14 day free trial."
                 } else {
-                    "Subscribe for access to Zed's hosted models."
+                    "Subscribe for access to Auracle's hosted models."
                 },
                 false,
             ),
@@ -451,9 +451,9 @@ impl RenderOnce for ZedAiConfiguration {
         if !self.is_connected {
             return v_flex()
                 .gap_2()
-                .child(Label::new("Sign in to have access to Zed's complete agentic experience with hosted models."))
+                .child(Label::new("Sign in to have access to Auracle's complete agentic experience with hosted models."))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", "Sign In to use Auracle AI")
                         .start_icon(Icon::new(IconName::Github).size(IconSize::Small).color(Color::Muted))
                         .full_width()
                         .on_click({

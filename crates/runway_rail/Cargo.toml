@@ -1,0 +1,24 @@
+[package]
+name = "runway_rail"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/runway_rail.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+auracle_agent_commands.workspace = true
+auracle_connect.workspace = true
+futures.workspace = true
+http_client.workspace = true
+serde_json.workspace = true
+gpui.workspace = true
+ui.workspace = true
+workspace.workspace = true

@@ -1377,6 +1377,94 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_agent_commands"
+version = "0.1.0"
+dependencies = [
+ "agent_ui",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_connect"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "editor",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "menu",
+ "paths",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_connections"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "editor",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "menu",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_onboarding"
+version = "0.1.0"
+dependencies = [
+ "agent_settings",
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "db",
+ "editor",
+ "fs",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "language_model",
+ "log",
+ "menu",
+ "serde_json",
+ "settings",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
+name = "auracle_status"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auto_update"
 version = "0.1.0"
 dependencies = [
@@ -2353,6 +2441,20 @@ dependencies = [
  "futures-io",
  "futures-lite 2.6.1",
  "piper",
+]
+
+[[package]]
+name = "blotter_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -6323,6 +6425,8 @@ dependencies = [
  "async-compression",
  "async-tar",
  "async-trait",
+ "async_zip",
+ "chrono",
  "client",
  "cloud_api_types",
  "collections",
@@ -6357,6 +6461,7 @@ dependencies = [
  "tempfile",
  "theme",
  "theme_extension",
+ "theme_importer",
  "theme_settings",
  "toml 0.8.23",
  "tracing",
@@ -8937,6 +9042,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 
 [[package]]
+name = "incidents_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10092,7 +10211,7 @@ dependencies = [
 [[package]]
 name = "libwebrtc"
 version = "0.3.26"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "cxx",
  "glib",
@@ -10190,7 +10309,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 [[package]]
 name = "livekit"
 version = "0.7.32"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "base64 0.22.1",
  "bmrng",
@@ -10216,7 +10335,7 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.4.14"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "base64 0.21.7",
  "futures-util",
@@ -10243,7 +10362,7 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.7.1"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "futures-util",
  "livekit-runtime",
@@ -10259,7 +10378,7 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.4.0"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -11501,7 +11620,8 @@ dependencies = [
 [[package]]
 name = "notify"
 version = "9.0.0-rc.4"
-source = "git+https://github.com/zed-industries/notify?rev=faecbc33db4f59313e5225ef766bfd9e54a54cfd#faecbc33db4f59313e5225ef766bfd9e54a54cfd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b44b771d4dd781ef14c84078693e67495da6b47f609f72e8a4da8420a861240e"
 dependencies = [
  "bitflags 2.10.0",
  "inotify 0.11.0",
@@ -11531,7 +11651,8 @@ dependencies = [
 [[package]]
 name = "notify-types"
 version = "2.1.0"
-source = "git+https://github.com/zed-industries/notify?rev=faecbc33db4f59313e5225ef766bfd9e54a54cfd#faecbc33db4f59313e5225ef766bfd9e54a54cfd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
 dependencies = [
  "bitflags 2.10.0",
 ]
@@ -15506,6 +15627,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8388ea1a9e0ea807e442e8263a699e7edcb320ecbcd21b4fa8ff859acce3ba"
 
 [[package]]
+name = "runs_dock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "runtimelib"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15529,6 +15664,21 @@ dependencies = [
  "thiserror 2.0.17",
  "uuid",
  "zeromq",
+]
+
+[[package]]
+name = "runway_rail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_agent_commands",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -15896,6 +16046,20 @@ dependencies = [
  "parking_lot",
  "rand 0.9.4",
  "web-time",
+]
+
+[[package]]
+name = "schedules_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -16583,6 +16747,7 @@ dependencies = [
  "agent_skills",
  "anyhow",
  "audio",
+ "auracle_connections",
  "cloud_api_types",
  "codestral",
  "component",
@@ -17415,6 +17580,20 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strategies_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
 
 [[package]]
 name = "streaming-iterator"
@@ -19839,6 +20018,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "validation_rail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20871,7 +21064,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.23"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "cc",
  "cxx",
@@ -20885,7 +21078,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.13"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c3a55bbc207008f1ca3474b6037fdd3c443cad0f#c3a55bbc207008f1ca3474b6037fdd3c443cad0f"
+source = "git+https://github.com/SiixQuant/livekit-rust-sdks?rev=cb68aa48b4722c4428efa989b52afaf1296609bb#cb68aa48b4722c4428efa989b52afaf1296609bb"
 dependencies = [
  "anyhow",
  "fs2",
@@ -22851,8 +23044,14 @@ dependencies = [
  "askpass",
  "assets",
  "audio",
+ "auracle_agent_commands",
+ "auracle_connect",
+ "auracle_connections",
+ "auracle_onboarding",
+ "auracle_status",
  "auto_update",
  "auto_update_ui",
+ "blotter_panel",
  "breadcrumbs",
  "call",
  "channel",
@@ -22904,6 +23103,7 @@ dependencies = [
  "http_client",
  "image",
  "image_viewer",
+ "incidents_panel",
  "input_latency_ui",
  "inspector_ui",
  "install_cli",
@@ -22950,6 +23150,9 @@ dependencies = [
  "repl",
  "reqwest_client",
  "rope",
+ "runs_dock",
+ "runway_rail",
+ "schedules_panel",
  "search",
  "semver",
  "serde",
@@ -22963,6 +23166,7 @@ dependencies = [
  "smol",
  "snippet_provider",
  "snippets_ui",
+ "strategies_panel",
  "svg_preview",
  "sysinfo 0.37.2",
  "system_specs",
@@ -22988,6 +23192,7 @@ dependencies = [
  "urlencoding",
  "util",
  "uuid",
+ "validation_rail",
  "vim",
  "vim_mode_setting",
  "watch",
@@ -23502,3 +23707,13 @@ dependencies = [
  "syn 2.0.117",
  "winnow 1.0.2",
 ]
+
+[[patch.unused]]
+name = "notify"
+version = "8.2.0"
+source = "git+https://github.com/zed-industries/notify.git?rev=6566ae63331ffd1f2025b18dc00c3049fb8588c9#6566ae63331ffd1f2025b18dc00c3049fb8588c9"
+
+[[patch.unused]]
+name = "notify-types"
+version = "2.0.0"
+source = "git+https://github.com/zed-industries/notify.git?rev=6566ae63331ffd1f2025b18dc00c3049fb8588c9#6566ae63331ffd1f2025b18dc00c3049fb8588c9"

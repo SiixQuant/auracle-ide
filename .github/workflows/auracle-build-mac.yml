@@ -1,0 +1,73 @@
+# Lean macOS build for the Auracle IDE fork.
+#
+# The upstream run_bundling.yml builds Linux + macOS + Windows on custom
+# Namespace/self-hosted runners that don't exist on this fork. This workflow
+# builds ONLY the macOS (Apple Silicon) .dmg on a GitHub-hosted macos-14
+# runner (which ships full Xcode, so the Metal shader compiler is present).
+#
+# No signing/notarization secrets are configured here, so script/bundle-mac
+# degrades to an ad-hoc-signed (unsigned) .dmg automatically. First launch:
+# right-click the app > Open to clear Gatekeeper. A signed/notarized public
+# build needs an Apple Developer cert + notarization secrets (not required
+# for internal builds).
+name: Build Auracle IDE (macOS)
+
+# Manual trigger only — Mac CI minutes are expensive, so we dispatch this
+# deliberately (gh workflow run / the Actions "Run workflow" button) rather
+# than on every push.
+on:
+  workflow_dispatch:
+
+jobs:
+  bundle_mac_aarch64:
+    runs-on: macos-14
+    # A cold full Zed/GPUI release build (incl. the webrtc C++) runs ~90-120 min
+    # on a GitHub Mac runner; 90 was too tight (it timed out mid-final-crates).
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: 0
+      # NOTE: the webrtc-sys C++20-vs-libc++ break is fixed at the SOURCE in the
+      # SiixQuant/livekit-rust-sdks fork (build.rs -> -std=c++17), wired via the
+      # [patch.crates-io] entries in Cargo.toml. No CXXFLAGS override is needed.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          clean: false
+      - name: Setup Node (dmg-license needs it)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+      # Cache the cargo registry/git + compiled dependencies (webrtc-sys, the
+      # huge dep tree) so re-runs skip ~most of the cold compile. First run
+      # populates the cache; subsequent runs are dramatically faster/cheaper.
+      - name: Cache Rust deps
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: auracle-ide-mac-aarch64
+          cache-on-failure: "true"
+      # Newer ld-prime (Xcode 16) does better branch-island insertion for
+      # >128MB binaries — a linker-level safety net if the shrunk binary still
+      # lands slightly over. Free now that webrtc is fixed at source (any Xcode
+      # links cleanly C++-wise). Falls back to the newest Xcode 16 present.
+      - name: Select Xcode 16 for large-binary linking headroom
+        run: |
+          best=""
+          for app in /Applications/Xcode_16.2*.app /Applications/Xcode_16.1*.app /Applications/Xcode_16*.app; do
+            if [ -d "$app" ]; then best="$app"; break; fi
+          done
+          if [ -n "$best" ]; then
+            sudo xcode-select -s "$best/Contents/Developer"
+            echo "Selected $best"
+          else
+            echo "No Xcode 16 found; using default $(xcode-select -p)"
+          fi
+          echo "SDK: $(xcrun --show-sdk-version)"; xcrun -f metal && echo "metal OK"
+      - name: Bundle macOS app (aarch64, unsigned)
+        run: ./script/bundle-mac aarch64-apple-darwin
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Auracle-IDE-aarch64-dmg
+          path: target/aarch64-apple-darwin/release/Auracle-aarch64.dmg
+          if-no-files-found: error

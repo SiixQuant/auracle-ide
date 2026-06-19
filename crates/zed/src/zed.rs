@@ -105,8 +105,7 @@ use zed_actions::{
     OpenStatusPage, OpenZedUrl, Quit,
 };
 
-const DOCS_URL: &str = "https://zed.dev/docs/";
-const STATUS_URL: &str = "https://status.zed.dev";
+const STATUS_URL: &str = "https://github.com/SiixQuant/Auracle";
 
 pub struct CrashHandler(pub Arc<crashes::Client>);
 
@@ -389,7 +388,7 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
             height: px(240.0),
         }),
         tabbing_identifier: if use_system_window_tabs {
-            Some(String::from("zed"))
+            Some(String::from("auracle"))
         } else {
             None
         },
@@ -600,6 +599,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             cx.new(|_| line_ending_selector::LineEndingIndicator::default());
         let merge_conflict_indicator =
             cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
+        auracle_status::register(workspace, window, cx);
         workspace.status_bar().update(cx, |status_bar, cx| {
             status_bar.add_left_item(search_button, window, cx);
             status_bar.add_left_item(lsp_button, window, cx);
@@ -632,13 +632,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 #[allow(unused)]
 fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs::fs_watcher::global(|_| {}) {
+        let docs_url = zed_urls::docs_url(cx);
         let message = format!(
             db::indoc! {r#"
             inotify_init returned {}
 
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
+            This may be due to system-wide limits on inotify instances. For troubleshooting see: {}
             "#},
-            e
+            e, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
@@ -650,7 +651,7 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(0) {
                 cx.update(|cx| {
-                    cx.open_url("https://zed.dev/docs/linux#could-not-start-inotify");
+                    cx.open_url(&docs_url);
                     cx.quit();
                 });
             }
@@ -663,13 +664,14 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
 #[allow(unused)]
 fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs::fs_watcher::global(|_| {}) {
+        let docs_url = zed_urls::docs_url(cx);
         let message = format!(
             db::indoc! {r#"
             ReadDirectoryChangesW initialization failed: {}
 
-            This may occur on network filesystems and WSL paths. For troubleshooting see: https://zed.dev/docs/windows
+            This may occur on network filesystems and WSL paths. For troubleshooting see: {}
             "#},
-            e
+            e, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
@@ -681,7 +683,7 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(0) {
                 cx.update(|cx| {
-                    cx.open_url("https://zed.dev/docs/windows");
+                    cx.open_url(&docs_url);
                     cx.quit()
                 });
             }
@@ -696,18 +698,11 @@ fn show_software_emulation_warning_if_needed(
     cx: &mut Context<Workspace>,
 ) {
     if specs.is_software_emulated && std::env::var("ZED_ALLOW_EMULATED_GPU").is_err() {
-        let (graphics_api, docs_url, open_url) = if cfg!(target_os = "windows") {
-            (
-                "DirectX",
-                "https://zed.dev/docs/windows",
-                "https://zed.dev/docs/windows",
-            )
+        let docs_url = zed_urls::docs_url(cx);
+        let graphics_api = if cfg!(target_os = "windows") {
+            "DirectX"
         } else {
-            (
-                "Vulkan",
-                "https://zed.dev/docs/linux",
-                "https://zed.dev/docs/linux#zed-fails-to-open-windows",
-            )
+            "Vulkan"
         };
         let message = format!(
             db::indoc! {r#"
@@ -731,7 +726,7 @@ fn show_software_emulation_warning_if_needed(
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(1) {
                 cx.update(|cx| {
-                    cx.open_url(open_url);
+                    cx.open_url(&docs_url);
                     cx.quit();
                 });
             }
@@ -743,11 +738,23 @@ fn show_software_emulation_warning_if_needed(
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
     cx.spawn_in(window, async move |workspace_handle, cx| {
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
+        let runway_rail = runway_rail::RunwayRail::load(workspace_handle.clone(), cx.clone());
+        let runs_dock = runs_dock::RunsDock::load(workspace_handle.clone(), cx.clone());
+        let incidents_panel = incidents_panel::IncidentsPanel::load(workspace_handle.clone(), cx.clone());
+        let blotter_panel = blotter_panel::BlotterPanel::load(workspace_handle.clone(), cx.clone());
+        let settings_panel =
+            auracle_onboarding::AuracleSettingsPanel::load(workspace_handle.clone(), cx.clone());
+        let validation_rail = validation_rail::ValidationRail::load(workspace_handle.clone(), cx.clone());
+        let strategies_panel = strategies_panel::StrategiesPanel::load(workspace_handle.clone(), cx.clone());
+        let schedules_panel = schedules_panel::SchedulesPanel::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
-        let channels_panel =
-            collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
+        // Auracle white-label: the collaboration panel is NOT added. It signs
+        // in to Zed's account/collab servers (zed.dev / collab.zed.dev) and
+        // lists Zed's community channels — irrelevant to Auracle, which has no
+        // collab backend. collab_ui::init() still runs (harmless global subs),
+        // so the crate stays compiled; the panel is just never shown.
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -767,10 +774,17 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
 
         futures::join!(
             add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(runway_rail, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(runs_dock, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(incidents_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(blotter_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(settings_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(validation_rail, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(strategies_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(schedules_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
         );
@@ -880,7 +894,7 @@ fn register_actions(
     cx: &mut Context<Workspace>,
 ) {
     workspace
-        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(&zed_urls::docs_url(cx)))
         .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
         .register_action(
             |workspace: &mut Workspace,
@@ -1162,14 +1176,9 @@ fn register_actions(
                 workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
             },
         )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
-            },
-        )
+        // Auracle white-label: no CollabPanel ToggleFocus — the collab panel
+        // is never added (Zed account/collab is hidden), so there is nothing
+        // to toggle. collab_ui still compiles; the command is just not bound.
         .register_action(
             |workspace: &mut Workspace,
              _: &terminal_panel::ToggleFocus,
@@ -1614,7 +1623,7 @@ fn open_about_window(cx: &mut App) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some("About Zed".into()),
+                title: Some("About Auracle IDE".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),
@@ -5550,6 +5559,15 @@ mod tests {
             collab_ui::init(&app_state, cx);
             git_ui::init(cx);
             project_panel::init(cx);
+            runway_rail::init(cx);
+            runs_dock::init(cx);
+            incidents_panel::init(cx);
+            blotter_panel::init(cx);
+            validation_rail::init(cx);
+            strategies_panel::init(cx);
+            schedules_panel::init(cx);
+            auracle_agent_commands::init(cx);
+            auracle_connect::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
             copilot_chat::init(

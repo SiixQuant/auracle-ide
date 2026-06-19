@@ -990,7 +990,7 @@ mod tests {
 
     impl AgentServer for TestAgentServer {
         fn logo(&self) -> IconName {
-            IconName::ZedAssistant
+            IconName::AuracleAssistant
         }
 
         fn agent_id(&self) -> AgentId {

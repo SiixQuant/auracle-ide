@@ -9,21 +9,21 @@ use zed_actions::feedback::{EmailZed, FileBugReport, RequestFeature};
 actions!(
     zed,
     [
-        /// Opens the Zed repository on GitHub.
+        /// Opens the Auracle repository on GitHub.
         OpenZedRepo,
         /// Copies installed extensions to the clipboard for bug reports.
         CopyInstalledExtensionsIntoClipboard
     ]
 );
 
-const ZED_REPO_URL: &str = "https://github.com/zed-industries/zed";
+const ZED_REPO_URL: &str = "https://github.com/SiixQuant/Auracle";
 
-const REQUEST_FEATURE_URL: &str = "https://github.com/zed-industries/zed/discussions/new/choose";
+const REQUEST_FEATURE_URL: &str = "https://github.com/SiixQuant/Auracle/discussions/new/choose";
 
 fn file_bug_report_url(specs: &SystemSpecs) -> String {
     format!(
         concat!(
-            "https://github.com/zed-industries/zed/issues/new",
+            "https://github.com/SiixQuant/Auracle/issues/new",
             "?",
             "template=10_bug_report.yml",
             "&",
@@ -35,7 +35,7 @@ fn file_bug_report_url(specs: &SystemSpecs) -> String {
 
 fn email_zed_url(specs: &SystemSpecs) -> String {
     format!(
-        concat!("mailto:hi@zed.dev", "?", "body={}"),
+        concat!("mailto:support@aurapointcapital.com", "?", "body={}"),
         email_body(specs)
     )
 }

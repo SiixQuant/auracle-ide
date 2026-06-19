@@ -221,6 +221,10 @@ impl LanguageModelProvider for GoogleLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
+    fn set_api_key(&self, key: Option<String>, cx: &mut App) -> Task<Result<()>> {
+        self.state.update(cx, |state, cx| state.set_api_key(key, cx))
+    }
+
     fn configuration_view(
         &self,
         target_agent: language_model::ConfigurationViewTargetAgent,
@@ -478,7 +482,7 @@ impl Render for ConfigurationView {
                 .size_full()
                 .on_action(cx.listener(Self::save_api_key))
                 .child(Label::new(format!("To use {}, you need to add an API key. Follow these steps:", match &self.target_agent {
-                    ConfigurationViewTargetAgent::ZedAgent => "Zed's agent with Google AI".into(),
+                    ConfigurationViewTargetAgent::ZedAgent => "Auracle's agent with Google AI".into(),
                     ConfigurationViewTargetAgent::Other(agent) => agent.clone(),
                 })))
                 .child(
@@ -495,7 +499,7 @@ impl Render for ConfigurationView {
                 .child(self.api_key_editor.clone())
                 .child(
                     Label::new(
-                        format!("You can also set the {GEMINI_API_KEY_VAR_NAME} environment variable and restart Zed."),
+                        format!("You can also set the {GEMINI_API_KEY_VAR_NAME} environment variable and restart Auracle."),
                     )
                     .size(LabelSize::Small).color(Color::Muted),
                 )

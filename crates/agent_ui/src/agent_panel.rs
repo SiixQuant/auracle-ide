@@ -3071,6 +3071,29 @@ impl AgentPanel {
         self.serialize(cx);
     }
 
+    /// Open a fresh agent thread seeded with `prompt` and auto-submit it,
+    /// using the panel's currently-selected agent. This is the entry point for
+    /// the native Auracle command-palette commands ("Research ideas", "Run
+    /// backtest", …): each one drives the agent through a single preset request
+    /// that, in turn, calls the engine's MCP tools.
+    pub fn start_auracle_prompt(
+        &mut self,
+        title: SharedString,
+        prompt: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let options = CreateThreadOptions {
+            title: Some(title),
+            initial_content: Some(AgentInitialContent::ContentBlock {
+                blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
+                auto_submit: true,
+            }),
+            ..Default::default()
+        };
+        self.create_thread_with_options(options, AgentThreadSource::AgentPanel, window, cx);
+    }
+
     /// Creates a new retained thread and inserts it into the sidebar without
     /// switching the active view to it. Used by the `create_thread` agent tool,
     /// which passes an initial prompt, and optionally an agent and model
@@ -5029,7 +5052,8 @@ impl Panel for AgentPanel {
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<IconName> {
-        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::ZedAssistant)
+        (self.enabled(cx) && AgentSettings::get_global(cx).button)
+            .then_some(IconName::AuracleAssistant)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -5827,12 +5851,12 @@ impl AgentPanel {
                             }
                         })
                         .item(
-                            ContextMenuEntry::new("Zed Agent")
+                            ContextMenuEntry::new("Auracle Agent")
                                 .when(
                                     !showing_terminal && is_agent_selected(Agent::NativeAgent),
                                     |this| this.action(Box::new(NewThread)),
                                 )
-                                .icon(IconName::ZedAgent)
+                                .icon(IconName::AuracleAgent)
                                 .icon_color(Color::Muted)
                                 .handler({
                                     let workspace = workspace.clone();
@@ -6000,6 +6024,7 @@ impl AgentPanel {
             .unwrap_or(false);
 
         let has_custom_icon = selected_agent_custom_icon.is_some();
+        let selected_agent_custom_icon_for_button = selected_agent_custom_icon.clone();
         let selected_agent_builtin_icon = if showing_terminal {
             Some(IconName::Terminal)
         } else {
@@ -6094,14 +6119,74 @@ impl AgentPanel {
             .flex_none()
             .justify_between();
 
-        let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
-            Label::new(format!("New {} Thread", selected_agent_label))
-                .color(Color::Muted)
-                .truncate()
-                .into_any_element()
-        });
+        let toolbar_content = if can_create_entries && matches!(mode, ToolbarMode::EmptyThread) {
+            let (chevron_icon, icon_color, label_color) =
+                if self.new_thread_menu_handle.is_deployed() {
+                    (IconName::ChevronUp, Color::Accent, Color::Accent)
+                } else {
+                    (IconName::ChevronDown, Color::Muted, Color::Default)
+                };
 
-        let toolbar_content = {
+            let agent_icon = if let Some(icon_path) = selected_agent_custom_icon_for_button {
+                Icon::from_external_svg(icon_path)
+                    .size(IconSize::Small)
+                    .color(icon_color)
+            } else {
+                let icon_name = selected_agent_builtin_icon.unwrap_or(IconName::AuracleAgent);
+                Icon::new(icon_name).size(IconSize::Small).color(icon_color)
+            };
+
+            let agent_selector_button = Button::new("agent-selector-trigger", selected_agent_label)
+                .start_icon(agent_icon)
+                .color(label_color)
+                .end_icon(
+                    Icon::new(chevron_icon)
+                        .color(icon_color)
+                        .size(IconSize::XSmall),
+                );
+
+            let agent_selector_menu = PopoverMenu::new("new_thread_menu")
+                .trigger_with_tooltip(agent_selector_button, {
+                    move |_window, cx| {
+                        Tooltip::for_action_in(
+                            "New Thread…",
+                            &ToggleNewThreadMenu,
+                            &focus_handle,
+                            cx,
+                        )
+                    }
+                })
+                .menu({
+                    let builder = new_thread_menu_builder.clone();
+                    move |window, cx| builder(window, cx)
+                })
+                .with_handle(self.new_thread_menu_handle.clone())
+                .anchor(Anchor::TopLeft)
+                .offset(gpui::Point {
+                    x: px(1.0),
+                    y: px(1.0),
+                });
+
+            base_container
+                .child(
+                    h_flex()
+                        .size_full()
+                        .gap(DynamicSpacing::Base04.rems(cx))
+                        .pl(DynamicSpacing::Base04.rems(cx))
+                        .child(agent_selector_menu),
+                )
+                .child(
+                    h_flex()
+                        .h_full()
+                        .flex_none()
+                        .gap_1()
+                        .pl_1()
+                        .pr_1()
+                        .child(full_screen_button)
+                        .child(self.render_panel_options_menu(window, cx)),
+                )
+                .into_any_element()
+        } else {
             let new_thread_menu = PopoverMenu::new("new_thread_menu")
                 .trigger_with_tooltip(
                     IconButton::new("new_thread_menu_btn", IconName::Plus)
@@ -6136,10 +6221,7 @@ impl AgentPanel {
                         } else {
                             selected_agent.into_any_element()
                         })
-                        .child(match empty_thread_title {
-                            Some(title) => title,
-                            None => self.render_title_view(window, cx),
-                        }),
+                        .child(self.render_title_view(window, cx)),
                 )
                 .child(
                     h_flex()

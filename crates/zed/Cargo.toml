@@ -6,7 +6,7 @@ version = "1.8.0"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 authors = ["Zed Team <hi@zed.dev>"]
-default-run = "zed"
+default-run = "auracle"
 
 [lints]
 workspace = true
@@ -54,7 +54,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "zed"
+name = "auracle"
 path = "src/main.rs"
 
 [[bin]]
@@ -168,6 +168,18 @@ picker.workspace = true
 profiling.workspace = true
 project.workspace = true
 project_panel.workspace = true
+auracle_agent_commands.workspace = true
+auracle_connect.workspace = true
+auracle_connections.workspace = true
+auracle_onboarding.workspace = true
+auracle_status.workspace = true
+blotter_panel.workspace = true
+incidents_panel.workspace = true
+runs_dock.workspace = true
+runway_rail.workspace = true
+schedules_panel.workspace = true
+strategies_panel.workspace = true
+validation_rail.workspace = true
 project_symbols.workspace = true
 prompt_store.workspace = true
 proto.workspace = true
@@ -275,35 +287,40 @@ repl = { workspace = true, features = ["test-support"] }
 
 [package.metadata.bundle-dev]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
-identifier = "dev.zed.Zed-Dev"
-name = "Zed Dev"
+identifier = "com.aurapointcapital.auracle-ide-dev"
+name = "Auracle IDE Dev"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["auracle"]
 
 [package.metadata.bundle-nightly]
 icon = ["resources/app-icon-nightly@2x.png", "resources/app-icon-nightly.png"]
-identifier = "dev.zed.Zed-Nightly"
-name = "Zed Nightly"
+identifier = "com.aurapointcapital.auracle-ide-nightly"
+name = "Auracle IDE Nightly"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["auracle"]
 
 [package.metadata.bundle-preview]
 icon = ["resources/app-icon-preview@2x.png", "resources/app-icon-preview.png"]
-identifier = "dev.zed.Zed-Preview"
-name = "Zed Preview"
+identifier = "com.aurapointcapital.auracle-ide-preview"
+name = "Auracle IDE Preview"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["auracle"]
 
 [package.metadata.bundle-stable]
+# Debranded to Auracle. The launcher (auracle-desktop view.rs) launches the
+# IDE by path "/Applications/Auracle IDE.app", so the bundle name MUST be
+# "Auracle IDE" for the launcher->IDE auto-connect handoff to work.
+# NOTE: app-icon.png is still upstream Zed's artwork — replace with an Auracle
+# logo asset to finish the visual debrand.
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
-identifier = "dev.zed.Zed"
-name = "Zed"
+identifier = "com.aurapointcapital.auracle-ide"
+name = "Auracle IDE"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["auracle"]
 
 [package.metadata.cargo-machete]
 ignored = ["profiling", "zstd", "tracing"]

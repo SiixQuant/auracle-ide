@@ -54,7 +54,7 @@ actions!(
 
 const COPILOT_SETTINGS_PATH: &str = "/settings/copilot";
 const COPILOT_SETTINGS_URL: &str = concat!("https://github.com", "/settings/copilot");
-const PRIVACY_DOCS: &str = "https://zed.dev/docs/ai/privacy-and-security";
+const PRIVACY_DOCS: &str = "https://github.com/SiixQuant/Auracle/wiki";
 
 struct CopilotErrorToast;
 
@@ -335,7 +335,7 @@ impl Render for EditPredictionButton {
                     .as_ref()
                     .map(|p| p.icons(cx))
                     .unwrap_or_else(|| {
-                        edit_prediction_types::EditPredictionIconSet::new(IconName::ZedPredict)
+                        edit_prediction_types::EditPredictionIconSet::new(IconName::AuraclePredict)
                     });
 
                 let ep_icon;
@@ -952,7 +952,7 @@ impl EditPredictionButton {
                 .as_ref()
                 .map(|p| p.icons(cx))
                 .unwrap_or_else(|| {
-                    edit_prediction_types::EditPredictionIconSet::new(IconName::ZedPredict)
+                    edit_prediction_types::EditPredictionIconSet::new(IconName::AuraclePredict)
                 });
             menu = menu.item(
                 ContextMenuEntry::new("This file is excluded.")
@@ -1209,7 +1209,7 @@ impl EditPredictionButton {
                             },
                             |_window, cx| cx.open_url(&zed_urls::account_url(cx)),
                         )
-                        .entry("Upgrade to Zed Pro or contact us.", None, |_window, cx| {
+                        .entry("Upgrade to Auracle Pro or contact us.", None, |_window, cx| {
                             telemetry::event!(
                                 "Edit Prediction Menu Action",
                                 action = "upsell_clicked",
@@ -1232,7 +1232,7 @@ impl EditPredictionButton {
                             },
                         )
                         .entry(
-                            "Check your payment status or contact us at billing-support@zed.dev to continue using this feature.",
+                            "Check your payment status or contact us at support@aurapointcapital.com to continue using this feature.",
                             None,
                             |_window, cx| {
                                 cx.open_url(&zed_urls::account_url(cx))
@@ -1595,7 +1595,7 @@ fn render_zeta_tab_animation(cx: &App) -> impl IntoElement {
             8.,
         ))
         .child(tab_sequence(true))
-        .child(Icon::new(IconName::ZedPredict))
+        .child(Icon::new(IconName::AuraclePredict))
         .child(tab_sequence(false))
 }
 

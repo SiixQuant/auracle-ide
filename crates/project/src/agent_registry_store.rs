@@ -201,7 +201,16 @@ impl AgentRegistryStore {
     /// Refresh the registry from the network.
     ///
     /// This will fetch the latest registry data and update the cache.
-    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub fn refresh(&mut self, _cx: &mut Context<Self>) {
+        // Auracle fork: the remote third-party agent catalog (and its
+        // per-agent icon fetches) stays off — agents come from the
+        // workspace's own MCP configuration, not a marketplace
+        // registry. Cached/empty registry renders the existing empty
+        // state in the UI.
+    }
+
+    #[allow(dead_code)]
+    fn refresh_upstream_disabled(&mut self, cx: &mut Context<Self>) {
         if self.pending_refresh.is_some() {
             return;
         }

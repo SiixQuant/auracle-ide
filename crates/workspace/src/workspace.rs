@@ -9409,9 +9409,9 @@ pub struct OpenChannelNotesById {
 actions!(
     zed,
     [
-        /// Opens the Zed log file.
+        /// Opens the Auracle log file.
         OpenLog,
-        /// Reveals the Zed log file in the system file manager.
+        /// Reveals the Auracle log file in the system file manager.
         RevealLogInFileManager
     ]
 );
@@ -9625,7 +9625,7 @@ pub fn join_channel(
                         let detail: SharedString = match err.error_code() {
                             ErrorCode::SignedOut => "Please sign in to continue.".into(),
                             ErrorCode::UpgradeRequired => concat!(
-                                "Your are running an unsupported version of Zed. ",
+                                "Your are running an unsupported version of Auracle. ",
                                 "Please update to continue."
                             )
                             .into(),

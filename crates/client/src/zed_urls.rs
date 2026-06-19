@@ -18,6 +18,12 @@ pub fn account_url(cx: &App) -> String {
     format!("{server_url}/account", server_url = server_url(cx))
 }
 
+/// Returns the URL to the product documentation, relative to the configured
+/// server URL so the link tracks the deployment environment.
+pub fn docs_url(cx: &App) -> String {
+    format!("{server_url}/docs/", server_url = server_url(cx))
+}
+
 /// Returns the URL to the start trial page on zed.dev.
 pub fn start_trial_url(cx: &App) -> String {
     format!(
