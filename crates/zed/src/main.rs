@@ -750,6 +750,7 @@ fn main() {
         validation_rail::init(cx);
         auracle_connect::init(cx);
         auracle_connections::init(cx);
+        auracle_onboarding::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
@@ -1099,10 +1100,10 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                         .focus_panel::<validation_rail::ValidationRail>(window, cx);
                                 }
                                 "connections" => {
-                                    window.dispatch_action(
-                                        Box::new(auracle_connections::OpenBrokerWizard),
-                                        cx,
-                                    );
+                                    workspace
+                                        .focus_panel::<auracle_onboarding::AuracleSettingsPanel>(
+                                            window, cx,
+                                        );
                                 }
                                 other => {
                                     log::warn!(

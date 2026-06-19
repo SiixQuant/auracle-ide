@@ -294,6 +294,19 @@ pub trait LanguageModelProvider: 'static {
     }
     fn is_authenticated(&self, cx: &App) -> bool;
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>>;
+    /// Imports an API key into this provider's credential store (the system
+    /// keychain) without going through the configuration view's editor. This
+    /// is the programmatic counterpart to `authenticate`: where `authenticate`
+    /// loads an existing key, this writes one. The default returns an error so
+    /// providers that don't authenticate with a bearer key (cloud sign-in,
+    /// local servers, OAuth) honestly report that they have no key to set.
+    /// Keychain-backed providers override it to forward to their own
+    /// `set_api_key`, which computes the correct credential URL from settings.
+    fn set_api_key(&self, _key: Option<String>, _cx: &mut App) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!(
+            "this provider does not accept an API key"
+        )))
+    }
     fn configuration_view(
         &self,
         target_agent: ConfigurationViewTargetAgent,

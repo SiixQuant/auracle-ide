@@ -193,6 +193,10 @@ impl LanguageModelProvider for XAiLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
+    fn set_api_key(&self, key: Option<String>, cx: &mut App) -> Task<Result<()>> {
+        self.state.update(cx, |state, cx| state.set_api_key(key, cx))
+    }
+
     fn configuration_view(
         &self,
         _target_agent: language_model::ConfigurationViewTargetAgent,

@@ -40,7 +40,7 @@ actions!(
     ]
 );
 
-const MAX_FIELDS: usize = 10;
+pub const MAX_FIELDS: usize = 10;
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
@@ -70,47 +70,84 @@ pub enum WizardScope {
 // ── Engine JSON shapes (introspection-driven) ────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
-struct BrokerSummary {
-    id: String,
+pub struct BrokerSummary {
+    pub id: String,
     #[serde(default)]
-    display_label: String,
+    pub display_label: String,
     #[serde(default)]
-    blurb: String,
+    pub blurb: String,
     #[serde(default)]
-    status: String,
+    pub status: String,
 }
 
 #[derive(Clone, Deserialize, Default)]
-struct FieldMeta {
-    name: String,
+pub struct FieldMeta {
+    pub name: String,
     #[serde(default)]
-    label: String,
+    pub label: String,
     #[serde(default)]
-    kind: String,
+    pub kind: String,
     #[serde(default)]
-    required: bool,
+    pub required: bool,
     #[serde(default)]
-    has_value: bool,
+    pub has_value: bool,
     #[serde(default)]
-    preview: String,
+    pub preview: String,
     #[serde(default)]
-    options: Vec<String>,
+    pub options: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Default)]
-struct Capability {
+pub struct Capability {
     #[serde(default)]
-    capabilities: std::collections::BTreeMap<String, String>,
+    pub capabilities: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    asset_kinds: Vec<String>,
+    pub asset_kinds: Vec<String>,
     #[serde(default)]
-    unsupported: Vec<String>,
+    pub unsupported: Vec<String>,
     #[serde(default)]
-    ok: bool,
+    pub ok: bool,
     #[serde(default)]
-    reason: String,
+    pub reason: String,
     #[serde(default)]
-    error: Option<String>,
+    pub error: Option<String>,
+}
+
+// ── Shared settings (cross-store sync source of truth) ───────────────
+
+/// The engine's view of the shared settings, read over loopback from
+/// `GET /ui/api/settings`. Only the fields the IDE consumes are modeled; the
+/// rest of the payload is ignored. These are the "shared truths" the launcher
+/// and IDE both reflect: which data keys are configured, which AI model the
+/// operator designated, and the account tier.
+#[derive(Clone, Deserialize, Default)]
+pub struct SharedSettings {
+    #[serde(default)]
+    pub data_keys: std::collections::BTreeMap<String, DataKeyState>,
+    #[serde(default)]
+    pub ai_model: AiModelState,
+    #[serde(default)]
+    pub tier: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+pub struct DataKeyState {
+    #[serde(default)]
+    pub configured: bool,
+}
+
+/// The engine's designated default AI model. `provider`/`model_id` name the
+/// selection; `configured` reports whether the engine itself holds a usable
+/// key for that provider. The plaintext key is NEVER in this payload — it is
+/// fetched separately and only over loopback via [`fetch_ai_key`].
+#[derive(Clone, Deserialize, Default)]
+pub struct AiModelState {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub configured: bool,
 }
 
 // ── Wizard entity ────────────────────────────────────────────────────
@@ -307,7 +344,10 @@ fn base_url(config: &AuracleConfig) -> String {
         .unwrap_or_else(|| "http://127.0.0.1:1969".into())
 }
 
-async fn get_json(
+/// Authenticated GET against a `/ui/api` route, returning parsed JSON. Made
+/// `pub` so sibling surfaces (the native settings panel) can read engine
+/// truths through the same loopback transport.
+pub async fn get_json(
     http: Arc<dyn http_client::HttpClient>,
     path: &str,
 ) -> Result<serde_json::Value> {
@@ -327,7 +367,7 @@ async fn get_json(
     Ok(serde_json::from_str(&text)?)
 }
 
-async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<BrokerSummary>> {
+pub async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<BrokerSummary>> {
     let value = get_json(http, "/ui/api/connections").await?;
     let list = value
         .get("connections")
@@ -340,7 +380,10 @@ async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<Brok
         .collect())
 }
 
-async fn get_fields(http: Arc<dyn http_client::HttpClient>, broker: &str) -> Result<Vec<FieldMeta>> {
+pub async fn get_fields(
+    http: Arc<dyn http_client::HttpClient>,
+    broker: &str,
+) -> Result<Vec<FieldMeta>> {
     let value = get_json(http, &format!("/ui/api/connections/{broker}")).await?;
     let list = value
         .get("fields")
@@ -353,7 +396,7 @@ async fn get_fields(http: Arc<dyn http_client::HttpClient>, broker: &str) -> Res
         .collect())
 }
 
-async fn get_capability(
+pub async fn get_capability(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
 ) -> Result<Capability> {
@@ -367,7 +410,11 @@ async fn get_capability(
 /// requires the cookie and header to match). We hit `/ui/api/status` rather
 /// than an HTML page so the cookie still flows under the headless web
 /// profile, where portal pages 404 but the `/ui/api` surface stays served.
-async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, config: &AuracleConfig) -> String {
+///
+/// Made `pub` so the native settings surface can reuse the same authenticated,
+/// CSRF-correct transport for the `/ui/api/settings` calls rather than
+/// re-implementing the header dance.
+pub async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, config: &AuracleConfig) -> String {
     let key = config.api_key.clone().unwrap_or_default();
     let Ok(request) = http_client::http::Request::builder()
         .uri(format!("{}/ui/api/status", base_url(config)))
@@ -389,8 +436,24 @@ async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, config: &AuracleConf
     String::new()
 }
 
-async fn post_json(
+/// Authenticated, CSRF-correct POST/PUT-style mutation against a `/ui/api`
+/// route. Defaults to POST; callers that need PUT use [`send_json`]. Made
+/// `pub` so the native settings panel can mirror the AI model up to the engine
+/// through the same transport rather than re-deriving the header dance.
+pub async fn post_json(
     http: Arc<dyn http_client::HttpClient>,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value> {
+    send_json(http, "POST", path, body).await
+}
+
+/// The transport shared by [`post_json`] and the PUT-based settings writes.
+/// `method` is the HTTP verb ("POST" or "PUT"); the engine's settings writes
+/// require PUT, while connection saves/tests use POST.
+pub async fn send_json(
+    http: Arc<dyn http_client::HttpClient>,
+    method: &str,
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value> {
@@ -399,7 +462,7 @@ async fn post_json(
     let csrf = fetch_csrf(http.clone(), &config).await;
     let payload = serde_json::to_string(&body)?;
     let request = http_client::http::Request::builder()
-        .method("POST")
+        .method(method)
         .uri(format!("{}{path}", base_url(&config)))
         .header("Content-Type", "application/json")
         .header("X-API-Key", key.clone())
@@ -415,7 +478,7 @@ async fn post_json(
     Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
 }
 
-async fn test_connection(
+pub async fn test_connection(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
     body: serde_json::Value,
@@ -442,13 +505,68 @@ async fn test_connection(
     }
 }
 
-async fn save_connection(
+pub async fn save_connection(
     http: Arc<dyn http_client::HttpClient>,
     broker: &str,
     body: serde_json::Value,
 ) -> Result<()> {
     post_json(http, &format!("/ui/api/connections/{broker}/save"), body).await?;
     Ok(())
+}
+
+/// Read the shared settings the launcher and IDE both reflect. Owner-scoped on
+/// the engine; on this loopback transport the operator's own key authenticates.
+pub async fn get_settings(http: Arc<dyn http_client::HttpClient>) -> Result<SharedSettings> {
+    let value = get_json(http, "/ui/api/settings").await?;
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Mirror the IDE's chosen AI model up to the engine so the launcher reflects
+/// it (`PUT /ui/api/settings {ai_model:{provider, model_id, key}}`). The key is
+/// included so the engine can authenticate the same provider the IDE just
+/// authenticated — this is the IDE→engine half of true cross-store sync.
+/// Best-effort by contract: callers treat a failure as non-fatal.
+pub async fn put_ai_model(
+    http: Arc<dyn http_client::HttpClient>,
+    provider: &str,
+    model_id: &str,
+    key: Option<&str>,
+) -> Result<()> {
+    let mut ai_model = serde_json::Map::new();
+    ai_model.insert("provider".into(), provider.into());
+    ai_model.insert("model_id".into(), model_id.into());
+    if let Some(key) = key {
+        ai_model.insert("key".into(), key.into());
+    }
+    let body = serde_json::json!({ "ai_model": serde_json::Value::Object(ai_model) });
+    send_json(http, "PUT", "/ui/api/settings", body).await?;
+    Ok(())
+}
+
+/// Pull the plaintext AI-provider key the engine holds, so the IDE can import
+/// it into its own keychain (engine→IDE half of cross-store sync). This is the
+/// `POST /ui/api/settings/ai-key {provider}` handoff: loopback-only and
+/// never-logged engine-side, gated to the AI-providers whitelist. Returns the
+/// `(provider, key)` pair the engine returns; the engine 404s when it has no
+/// key for that provider, which surfaces here as an error the caller treats as
+/// "nothing to import".
+pub async fn fetch_ai_key(
+    http: Arc<dyn http_client::HttpClient>,
+    provider: &str,
+) -> Result<(String, String)> {
+    let body = serde_json::json!({ "provider": provider });
+    let value = post_json(http, "/ui/api/settings/ai-key", body).await?;
+    let provider = value
+        .get("provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or(provider)
+        .to_string();
+    let key = value
+        .get("key")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("the engine returned no key for this provider"))?;
+    Ok((provider, key))
 }
 
 // ── Render ───────────────────────────────────────────────────────────
