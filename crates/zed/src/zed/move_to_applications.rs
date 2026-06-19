@@ -105,7 +105,7 @@ impl MoveToApplicationsRequest {
                         PromptLevel::Critical,
                         "Failed to move Auracle to Applications",
                         Some(&error.to_string()),
-                        &["Ok"],
+                        &["OK"],
                     )
                     .await
                     .log_err();

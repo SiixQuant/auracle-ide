@@ -25,6 +25,7 @@ members = [
     "crates/auto_update_ui",
     "crates/aws_http_client",
     "crates/bedrock",
+    "crates/benchmarks",
     "crates/breadcrumbs",
     "crates/buffer_diff",
     "crates/call",
@@ -182,7 +183,6 @@ members = [
     "crates/strategies_panel",
     "crates/validation_rail",
     "crates/sandbox",
-    "crates/skill_creator",
     "crates/scheduler",
     "crates/schema_generator",
     "crates/search",
@@ -527,7 +527,7 @@ accesskit = "0.24.0"
 accesskit_macos = "0.26.0"
 accesskit_unix = "0.21.0"
 accesskit_windows = "0.32.1"
-agent-client-protocol = { version = "=0.13.1", features = ["unstable"] }
+agent-client-protocol = { version = "=0.14.0", features = ["unstable"] }
 aho-corasick = "1.1"
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 any_vec = "0.14"
@@ -616,6 +616,7 @@ fork = "0.4.0"
 futures = "0.3.32"
 futures-concurrency = "7.7.1"
 futures-lite = "1.13"
+futures-util = "0.3.32"
 gh-workflow = { git = "https://github.com/zed-industries/gh-workflow", rev = "37f3c0575d379c218a9c455ee67585184e40d43f" }
 
 globset = "0.4"
@@ -660,7 +661,16 @@ nix = "0.29"
 nucleo = "0.5"
 num-format = "0.4.4"
 objc = "0.2"
-objc2-app-kit = { version = "0.3", default-features = false, features = [ "NSGraphics" ] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSButton",
+    "NSControl",
+    "NSGraphics",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSArray",
     "NSAttributedString",
@@ -909,6 +919,7 @@ features = [
 ]
 
 [patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 notify = { git = "https://github.com/zed-industries/notify.git", rev = "6566ae63331ffd1f2025b18dc00c3049fb8588c9" }
 notify-types = { git = "https://github.com/zed-industries/notify.git", rev = "6566ae63331ffd1f2025b18dc00c3049fb8588c9" }
@@ -961,6 +972,7 @@ cranelift-codegen = { opt-level = 3 }
 wasmtime-environ = { opt-level = 3 }
 wasmtime-internal-cranelift = { opt-level = 3 }
 minidumper = { opt-level = 3 }
+serde_json = { opt-level = 3 }
 # Build single-source-file crates with cg=1 as it helps make `cargo build` of a whole workspace a bit faster
 activity_indicator = { codegen-units = 1 }
 assets = { codegen-units = 1 }
