@@ -1393,6 +1393,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_cockpit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connections",
+ "editor",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_connect"
 version = "0.1.0"
 dependencies = [
@@ -19092,6 +19106,7 @@ dependencies = [
  "open_path_prompt",
  "picker",
  "project",
+ "settings",
  "ui",
  "util",
  "workspace",
@@ -23047,6 +23062,7 @@ dependencies = [
  "assets",
  "audio",
  "auracle_agent_commands",
+ "auracle_cockpit",
  "auracle_connect",
  "auracle_connections",
  "auracle_onboarding",

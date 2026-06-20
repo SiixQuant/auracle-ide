@@ -37,8 +37,8 @@ use ui::{
 use util::ResultExt as _;
 
 use workspace::{
-    HideStatusItem, StatusItemView, Toast, Workspace, create_and_open_local_file, item::ItemHandle,
-    notifications::NotificationId,
+    HideStatusItem, StatusBarSettings, StatusItemView, Toast, Workspace,
+    create_and_open_local_file, item::ItemHandle, notifications::NotificationId,
 };
 use zed_actions::{OpenBrowser, OpenSettingsAt};
 
@@ -74,6 +74,10 @@ pub struct EditPredictionButton {
 
 impl Render for EditPredictionButton {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !StatusBarSettings::get_global(cx).edit_prediction_button {
+            return div().hidden();
+        }
+
         // Return empty div if AI is disabled
         if DisableAiSettings::get_global(cx).disable_ai {
             return div().hidden();
@@ -1209,14 +1213,18 @@ impl EditPredictionButton {
                             },
                             |_window, cx| cx.open_url(&zed_urls::account_url(cx)),
                         )
-                        .entry("Upgrade to Auracle Pro or contact us.", None, |_window, cx| {
-                            telemetry::event!(
-                                "Edit Prediction Menu Action",
-                                action = "upsell_clicked",
-                                reason = "account_age",
-                            );
-                            cx.open_url(&zed_urls::account_url(cx))
-                        })
+                        .entry(
+                            "Upgrade to Auracle Pro or contact us.",
+                            None,
+                            |_window, cx| {
+                                telemetry::event!(
+                                    "Edit Prediction Menu Action",
+                                    action = "upsell_clicked",
+                                    reason = "account_age",
+                                );
+                                cx.open_url(&zed_urls::account_url(cx))
+                            },
+                        )
                         .separator();
                 } else if self.user_store.read(cx).has_overdue_invoices() {
                     menu = menu

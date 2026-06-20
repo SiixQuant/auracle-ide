@@ -517,6 +517,22 @@ pub struct StatusBarSettingsContent {
     ///
     /// Default: non_utf8
     pub active_encoding_button: Option<EncodingDisplayOptions>,
+    /// Whether to show the active toolchain button in the status bar.
+    ///
+    /// Default: false
+    pub active_toolchain_button: Option<bool>,
+    /// Whether to show the vim mode indicator in the status bar.
+    ///
+    /// Default: false
+    pub vim_mode_button: Option<bool>,
+    /// Whether to show the image info button in the status bar.
+    ///
+    /// Default: false
+    pub image_info_button: Option<bool>,
+    /// Whether to show the edit prediction button in the status bar.
+    ///
+    /// Default: false
+    pub edit_prediction_button: Option<bool>,
 }
 
 #[derive(

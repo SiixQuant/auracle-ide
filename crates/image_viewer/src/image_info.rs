@@ -3,7 +3,7 @@ use project::image_store::{ImageFormat, ImageMetadata};
 use settings::Settings;
 use ui::prelude::*;
 use util::size::format_file_size;
-use workspace::{HideStatusItem, ItemHandle, StatusItemView, Workspace};
+use workspace::{HideStatusItem, ItemHandle, StatusBarSettings, StatusItemView, Workspace};
 
 use crate::{ImageFileSizeUnit, ImageView, ImageViewerSettings};
 
@@ -44,6 +44,10 @@ fn format_image_size(size: u64, image_unit_type: ImageFileSizeUnit) -> String {
 
 impl Render for ImageInfo {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !StatusBarSettings::get_global(cx).image_info_button {
+            return div().hidden();
+        }
+
         let settings = ImageViewerSettings::get_global(cx);
 
         let Some(metadata) = self.metadata.as_ref() else {

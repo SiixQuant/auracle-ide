@@ -790,6 +790,10 @@ impl VsCodeSettings {
             cursor_position_button: None,
             line_endings_button: None,
             active_encoding_button: None,
+            active_toolchain_button: None,
+            vim_mode_button: None,
+            image_info_button: None,
+            edit_prediction_button: None,
         })
     }
 

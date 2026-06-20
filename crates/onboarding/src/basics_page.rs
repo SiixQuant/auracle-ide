@@ -434,7 +434,10 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some("Trust All Projects By Default"),
-        Some("Automatically mark all new projects as trusted to unlock all Auracle's features".into()),
+        Some(
+            "Automatically mark all new projects as trusted to unlock all Auracle's features"
+                .into(),
+        ),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);

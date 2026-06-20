@@ -6276,10 +6276,9 @@ impl AgentPanel {
             }
         }
 
-        let plan = self.user_store.read(cx).plan();
-        let has_previous_trial = self.user_store.read(cx).trial_started_at().is_some();
-
-        plan.is_some_and(|plan| plan == Plan::ZedFree) && has_previous_trial
+        // Auracle never shows the Zed end-of-trial Pro upsell: the operator uses
+        // their own AI keys and self-hosted gateway, not Zed Pro billing.
+        false
     }
 
     fn dismiss_ai_onboarding(&mut self, cx: &mut Context<Self>) {
@@ -6314,25 +6313,9 @@ impl AgentPanel {
             return false;
         }
 
-        let has_configured_non_zed_providers = LanguageModelRegistry::read_global(cx)
-            .visible_providers()
-            .iter()
-            .any(|provider| {
-                provider.is_authenticated(cx)
-                    && provider.id() != language_model::ZED_CLOUD_PROVIDER_ID
-            });
-
-        match &self.base_view {
-            BaseView::Uninitialized | BaseView::Terminal { .. } => false,
-            BaseView::AgentThread { conversation_view } => {
-                if conversation_view.read(cx).as_native_thread(cx).is_some() {
-                    let history_is_empty = ThreadStore::global(cx).read(cx).is_empty();
-                    history_is_empty || !has_configured_non_zed_providers
-                } else {
-                    false
-                }
-            }
-        }
+        // Auracle never shows the Zed new-user / Pro onboarding card. The agent
+        // panel's empty state and BYO-key provider setup live in Auracle Settings.
+        false
     }
 
     fn render_new_user_onboarding(
