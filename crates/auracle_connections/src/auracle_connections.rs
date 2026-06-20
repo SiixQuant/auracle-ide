@@ -310,20 +310,18 @@ impl BrokerWizard {
         cx.notify();
         self._task = Some(cx.spawn(async move |this, cx| {
             let result = save_connection(http, &broker, body).await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        let generation = cx.global::<ConnectGeneration>().0 + 1;
-                        cx.set_global(ConnectGeneration(generation));
-                        cx.emit(DismissEvent);
-                    }
-                    Err(error) => {
-                        this.state = TestState::Verdict {
-                            ok: false,
-                            plain: SharedString::from(format!("Couldn't save: {error}.")),
-                        };
-                        cx.notify();
-                    }
+            this.update(cx, |this, cx| match result {
+                Ok(()) => {
+                    let generation = cx.global::<ConnectGeneration>().0 + 1;
+                    cx.set_global(ConnectGeneration(generation));
+                    cx.emit(DismissEvent);
+                }
+                Err(error) => {
+                    this.state = TestState::Verdict {
+                        ok: false,
+                        plain: SharedString::from(format!("Couldn't save: {error}.")),
+                    };
+                    cx.notify();
                 }
             })
             .ok();
@@ -467,7 +465,10 @@ pub async fn send_json(
         .header("Content-Type", "application/json")
         .header("X-API-Key", key.clone())
         .header("X-CSRF-Token", csrf.clone())
-        .header("Cookie", format!("auracle_session={key}; auracle_csrf={csrf}"))
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
         .body(http_client::AsyncBody::from(payload))?;
     let mut response = http.send(request).await?;
     if !response.status().is_success() {
@@ -569,6 +570,62 @@ pub async fn fetch_ai_key(
     Ok((provider, key))
 }
 
+// ── Provider-name reconciliation (engine vault-key ↔ IDE registry id) ──
+//
+// The engine and the IDE name the same AI provider differently and both
+// names are already shipped, so the IDE owns the translation. The engine
+// stores `ai_model.provider` as the vault-key name from
+// `auracle.keys.PROVIDERS` (whitelisted by `_AI_PROVIDERS` in
+// `auracle/houston/web/views/settings.py`): `anthropic`, `openai_api_key`,
+// `deepseek_api_key`, `ollama_host`. The IDE's `LanguageModelRegistry`
+// keys providers by registry id: `anthropic`, `openai`, `ollama`, and
+// `auracle-agent` (the engine-backed DeepSeek gateway — see
+// `language_models/src/provider/auracle.rs`'s `PROVIDER_ID`).
+//
+// The DeepSeek pairing is the load-bearing one: the launcher's "default
+// agent" writes `deepseek_api_key`, which the IDE surfaces as the
+// `auracle-agent` provider (not the bare `deepseek` provider, which would
+// require a pasted key the IDE deliberately never stores).
+//
+// These are intentionally a closed table of the four shipped pairs, not a
+// heuristic: an unknown engine name returns `None` (the caller falls back
+// to its default ordering) and an unknown IDE id passes through unchanged
+// (so a future BYO provider still mirrors *something* the engine can
+// reject honestly rather than being silently rewritten). No Google/Gemini
+// engine slot exists, so it is deliberately absent.
+
+/// The four shipped (engine vault-key name, IDE registry provider id) pairs.
+const PROVIDER_NAME_PAIRS: &[(&str, &str)] = &[
+    ("deepseek_api_key", "auracle-agent"),
+    ("anthropic", "anthropic"),
+    ("openai_api_key", "openai"),
+    ("ollama_host", "ollama"),
+];
+
+/// Map an engine vault-key provider name to the IDE registry provider id.
+/// Returns `None` for any provider the engine could store but the IDE has
+/// no registry provider for, so the caller keeps its own fallback ordering
+/// rather than seeding a provider that does not exist in the IDE.
+pub fn engine_provider_to_ide(engine_provider: &str) -> Option<&'static str> {
+    PROVIDER_NAME_PAIRS
+        .iter()
+        .find(|(engine, _)| *engine == engine_provider)
+        .map(|(_, ide)| *ide)
+}
+
+/// Map an IDE registry provider id to the engine vault-key provider name.
+/// An unrecognized id (e.g. a BYO frontier provider the engine doesn't
+/// model) passes through unchanged, so the engine's own `_AI_PROVIDERS`
+/// whitelist remains the single authority on what it will accept — the IDE
+/// never silently rewrites an id the engine might legitimately reject.
+pub fn ide_provider_to_engine(ide_provider: &str) -> &str {
+    PROVIDER_NAME_PAIRS
+        .iter()
+        .find(|(_, ide)| *ide == ide_provider)
+        .map(|(engine, _)| *engine)
+        .unwrap_or(ide_provider)
+}
+
 // ── Render ───────────────────────────────────────────────────────────
 
 impl EventEmitter<DismissEvent> for BrokerWizard {}
@@ -642,7 +699,11 @@ impl BrokerWizard {
             // control so the value is always a valid option — never a typo
             // in a free-text box. Other kinds use the text/password editor.
             let input = if field.kind == "select" {
-                let selected = self.selections.get(&field.name).cloned().unwrap_or_default();
+                let selected = self
+                    .selections
+                    .get(&field.name)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut segmented = h_flex().gap_1();
                 for option in field.options.clone() {
                     let field_name = field.name.clone();
@@ -676,11 +737,7 @@ impl BrokerWizard {
             form = form.child(
                 v_flex()
                     .gap_1()
-                    .child(
-                        Label::new(label)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
+                    .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                     .child(input),
             );
         }
@@ -688,7 +745,9 @@ impl BrokerWizard {
     }
 
     fn render_confirm(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().gap_2().child(Label::new("What this broker can do"));
+        let mut body = v_flex()
+            .gap_2()
+            .child(Label::new("What this broker can do"));
         match &self.capability {
             None => {
                 body = body.child(
@@ -713,7 +772,11 @@ impl BrokerWizard {
             Some(cap) => {
                 let mut chips = h_flex().gap_2();
                 for leg in ["data", "paper", "live"] {
-                    let state = cap.capabilities.get(leg).map(String::as_str).unwrap_or("unknown");
+                    let state = cap
+                        .capabilities
+                        .get(leg)
+                        .map(String::as_str)
+                        .unwrap_or("unknown");
                     let (text, color) = match state {
                         "yes" => (format!("{leg}: yes"), Color::Success),
                         "no" => (format!("{leg}: no"), Color::Muted),
@@ -823,5 +886,60 @@ impl Render for BrokerWizard {
                         )
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{engine_provider_to_ide, ide_provider_to_engine};
+
+    #[test]
+    fn engine_to_ide_maps_the_four_shipped_pairs() {
+        // The load-bearing pair: the launcher's "default agent" stores
+        // `deepseek_api_key`; the IDE surfaces it as the engine-backed
+        // `auracle-agent` provider, never the bare `deepseek` provider.
+        assert_eq!(
+            engine_provider_to_ide("deepseek_api_key"),
+            Some("auracle-agent")
+        );
+        assert_eq!(engine_provider_to_ide("anthropic"), Some("anthropic"));
+        assert_eq!(engine_provider_to_ide("openai_api_key"), Some("openai"));
+        assert_eq!(engine_provider_to_ide("ollama_host"), Some("ollama"));
+    }
+
+    #[test]
+    fn engine_to_ide_returns_none_for_unmodeled_provider() {
+        // An engine provider the IDE has no registry entry for must not be
+        // coerced — the seed keeps its own fallback ordering instead.
+        assert_eq!(engine_provider_to_ide(""), None);
+        assert_eq!(engine_provider_to_ide("polygon"), None);
+        // The bare IDE id is NOT a valid engine name; the inverse direction
+        // owns that pairing, so the forward lookup must miss.
+        assert_eq!(engine_provider_to_ide("auracle-agent"), None);
+    }
+
+    #[test]
+    fn ide_to_engine_maps_the_four_shipped_pairs() {
+        assert_eq!(ide_provider_to_engine("auracle-agent"), "deepseek_api_key");
+        assert_eq!(ide_provider_to_engine("anthropic"), "anthropic");
+        assert_eq!(ide_provider_to_engine("openai"), "openai_api_key");
+        assert_eq!(ide_provider_to_engine("ollama"), "ollama_host");
+    }
+
+    #[test]
+    fn ide_to_engine_passes_unknown_id_through_unchanged() {
+        // A BYO provider the engine doesn't model is forwarded verbatim so
+        // the engine's `_AI_PROVIDERS` whitelist stays the single authority
+        // on acceptance — the IDE never silently rewrites it.
+        assert_eq!(ide_provider_to_engine("x_ai"), "x_ai");
+        assert_eq!(ide_provider_to_engine(""), "");
+    }
+
+    #[test]
+    fn round_trip_is_stable_for_shipped_pairs() {
+        for ide in ["auracle-agent", "anthropic", "openai", "ollama"] {
+            let engine = ide_provider_to_engine(ide);
+            assert_eq!(engine_provider_to_ide(engine), Some(ide));
+        }
     }
 }

@@ -9878,6 +9878,8 @@ dependencies = [
  "anthropic",
  "anyhow",
  "async-lock",
+ "auracle_connect",
+ "auracle_connections",
  "aws-config",
  "aws-credential-types",
  "aws_http_client",

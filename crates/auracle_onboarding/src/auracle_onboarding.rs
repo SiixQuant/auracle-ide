@@ -174,9 +174,18 @@ fn any_ai_provider_authenticated(cx: &App) -> bool {
 /// "Configure once, reflected everywhere": once an operator (or the engine's
 /// key-provisioning handoff) has saved a provider API key, the agent surfaces
 /// should pick it up without the operator also hand-editing
-/// `agent.default_model`. This fills that slot from the engine's designated
-/// provider the first time a workspace opens, but only while it is still empty
-/// — it never overrides a model the operator chose.
+/// `agent.default_model`. This fills that slot the first time a workspace opens,
+/// but only while it is still empty — it never overrides a model the operator
+/// chose.
+///
+/// Ordering honors the launcher's choice: the engine's `ai_model.provider`
+/// (set when the operator picks a "default agent" in the launcher, e.g.
+/// `deepseek_api_key`) is mapped to its IDE registry id via
+/// [`auracle_connections::engine_provider_to_ide`] (e.g. `auracle-agent`) and,
+/// when that provider is visible, tried first so the launcher's selection wins.
+/// When the engine made no selection — or it doesn't map / doesn't
+/// authenticate — the candidate list falls back to the previous Anthropic-first
+/// ordering.
 ///
 /// The subtlety this guards against: `is_authenticated` is backed by
 /// `ApiKeyState::has_key`, which only becomes true once an *async* keychain
@@ -191,21 +200,51 @@ fn seed_shared_default_model(workspace: &Workspace, cx: &mut Context<Workspace>)
         return;
     }
     let fs = workspace.project().read(cx).fs().clone();
-
-    // Visible, non-cloud providers, with the engine's designated default
-    // provider tried first so a configured Claude key wins over any other
-    // saved credentials.
-    let mut candidates: Vec<Arc<dyn LanguageModelProvider>> = LanguageModelRegistry::read_global(cx)
-        .visible_providers()
-        .into_iter()
-        .filter(|provider| provider.id() != ZED_CLOUD_PROVIDER_ID)
-        .collect();
-    if candidates.is_empty() {
-        return;
-    }
-    candidates.sort_by_key(|provider| u8::from(provider.id() != ANTHROPIC_PROVIDER_ID));
+    let http = cx.http_client();
 
     cx.spawn(async move |_workspace, cx| {
+        // Ask the engine which provider the launcher designated, then translate
+        // its vault-key name to the IDE registry id. A failed fetch (engine
+        // down / cold) yields no preference, which is the honest fallback — the
+        // Anthropic-first ordering still applies.
+        let engine_provider = auracle_connections::get_settings(http)
+            .await
+            .ok()
+            .map(|settings| settings.ai_model.provider)
+            .unwrap_or_default();
+        let preferred_ide_id: Option<&'static str> =
+            auracle_connections::engine_provider_to_ide(engine_provider.trim());
+
+        // Build the candidate list inside the task so the registry read and the
+        // ordering both reflect the engine preference resolved above.
+        // `AsyncApp::update` (async_context.rs:163) returns the closure value
+        // directly, so this is the candidate vec, not a `Result`.
+        let candidates: Vec<Arc<dyn LanguageModelProvider>> = cx.update(|cx| {
+            let mut candidates: Vec<Arc<dyn LanguageModelProvider>> =
+                LanguageModelRegistry::read_global(cx)
+                    .visible_providers()
+                    .into_iter()
+                    .filter(|provider| provider.id() != ZED_CLOUD_PROVIDER_ID)
+                    .collect();
+            // Stable two-key sort: the engine-preferred provider first (when it
+            // resolved to a visible id), then Anthropic-first as before. Both
+            // keys are `0` for the winner, so a stable sort keeps the rest of
+            // the order intact.
+            candidates.sort_by_key(|provider| {
+                let id = provider.id();
+                let is_preferred =
+                    preferred_ide_id.is_some_and(|preferred| id.0.as_ref() == preferred);
+                (
+                    u8::from(!is_preferred),
+                    u8::from(id != ANTHROPIC_PROVIDER_ID),
+                )
+            });
+            candidates
+        });
+        if candidates.is_empty() {
+            return;
+        }
+
         let Some((provider, model)) = resolve_seed_model(candidates, cx).await else {
             return;
         };
@@ -235,7 +274,8 @@ fn seed_shared_default_model(workspace: &Workspace, cx: &mut Context<Workspace>)
 /// `authenticate` (which drives `ApiKeyState::load_if_needed`) *before* its
 /// `is_authenticated` is read, so a provider holding a saved-but-not-yet-loaded
 /// key is seeded rather than skipped. Returns the first authenticated
-/// candidate; the shared default is singular.
+/// candidate; the shared default is singular, and the caller has already
+/// ordered the candidates so the launcher-selected provider is tried first.
 async fn resolve_seed_model(
     candidates: Vec<Arc<dyn LanguageModelProvider>>,
     cx: &mut AsyncApp,
@@ -340,11 +380,7 @@ pub struct OnboardingWizard {
 }
 
 impl OnboardingWizard {
-    fn new(
-        workspace: WeakEntity<Workspace>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
         for _ in 0..auracle_connections::MAX_FIELDS {
             editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
@@ -784,8 +820,11 @@ impl OnboardingWizard {
                         label = format!("{label}  (optional)");
                     }
                     let input = if field.kind == "select" {
-                        let selected =
-                            self.selections.get(&field.name).cloned().unwrap_or_default();
+                        let selected = self
+                            .selections
+                            .get(&field.name)
+                            .cloned()
+                            .unwrap_or_default();
                         let mut segmented = h_flex().gap_1();
                         for option in field.options.clone() {
                             let field_name = field.name.clone();
@@ -801,10 +840,12 @@ impl OnboardingWizard {
                                 } else {
                                     ButtonStyle::Outlined
                                 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selections.insert(field_name.clone(), chosen.clone());
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.selections.insert(field_name.clone(), chosen.clone());
+                                        cx.notify();
+                                    },
+                                )),
                             );
                         }
                         segmented.into_any_element()
@@ -819,11 +860,7 @@ impl OnboardingWizard {
                     form = form.child(
                         v_flex()
                             .gap_1()
-                            .child(
-                                Label::new(label)
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
+                            .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                             .child(input),
                     );
                 }
@@ -951,10 +988,7 @@ impl OnboardingWizard {
 
     fn render_github(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let status: (Color, SharedString) = match &self.github_state {
-            GitHubAuthState::Unknown => (
-                Color::Muted,
-                "GitHub status not checked yet.".into(),
-            ),
+            GitHubAuthState::Unknown => (Color::Muted, "GitHub status not checked yet.".into()),
             GitHubAuthState::Checking => (Color::Muted, "Checking…".into()),
             GitHubAuthState::SignedIn(line) => (Color::Success, line.clone()),
             GitHubAuthState::SignedOut => (
