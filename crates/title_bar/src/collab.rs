@@ -142,6 +142,9 @@ fn render_color_ribbon(color: Hsla) -> impl Element {
 }
 
 impl TitleBar {
+    // Kept compiled but not rendered: Auracle does not use Zed's collaboration
+    // backend, so the title bar never adds the collaborator facepile.
+    #[allow(dead_code)]
     pub(crate) fn render_collaborator_list(
         &self,
         _: &mut Window,
@@ -333,6 +336,9 @@ impl TitleBar {
         )
     }
 
+    // Kept compiled but not rendered: Auracle has no Zed call backend, so the
+    // title bar never adds the share / mic / screen call controls.
+    #[allow(dead_code)]
     pub(crate) fn render_call_controls(
         &self,
         window: &mut Window,

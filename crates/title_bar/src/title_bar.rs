@@ -324,7 +324,10 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
-        children.push(self.render_collaborator_list(window, cx).into_any_element());
+        // Auracle does not connect to Zed's collaboration backend, so the
+        // collaborator facepile and the call controls below are never rendered.
+        // The methods are kept compiled (see `render_collaborator_list` /
+        // `render_call_controls`) but are not added to the title bar.
 
         if title_bar_settings.show_onboarding_banner {
             if let Some(banner) = &self.banner {
@@ -361,7 +364,6 @@ impl Render for TitleBar {
                 })
                 .gap_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
                 .when(
@@ -1140,7 +1142,9 @@ impl TitleBar {
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Auracle IDE to Collaborate",
+                    Some(AutoUpdateStatus::Updated { .. }) => {
+                        "Please restart Auracle IDE to Collaborate"
+                    }
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
@@ -1284,7 +1288,10 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Auracle IDE").color(Color::Accent))
+                                    .child(
+                                        Label::new("Restart to update Auracle IDE")
+                                            .color(Color::Accent),
+                                    )
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
