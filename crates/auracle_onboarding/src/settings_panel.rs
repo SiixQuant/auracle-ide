@@ -38,9 +38,7 @@ use util::ResultExt as _;
 use workspace::Workspace;
 use workspace::dock::{DockPosition, Panel, PanelEvent};
 
-use auracle_connections::{
-    AiModelState, BrokerSummary, Capability, FieldMeta, SharedSettings,
-};
+use auracle_connections::{AiModelState, BrokerSummary, Capability, FieldMeta, SharedSettings};
 
 actions!(
     auracle,
@@ -91,7 +89,10 @@ enum ModelStatus {
     Idle,
     Working,
     /// A message plus whether the underlying default is actually set/usable.
-    Verdict { ok: bool, plain: SharedString },
+    Verdict {
+        ok: bool,
+        plain: SharedString,
+    },
 }
 
 pub struct AuracleSettingsPanel {
@@ -219,21 +220,33 @@ impl AuracleSettingsPanel {
             let Some(shared) = shared else {
                 return;
             };
-            let provider_id = shared.ai_model.provider.trim().to_string();
-            if provider_id.is_empty() {
+            // The engine names the provider by its vault-key (e.g.
+            // `deepseek_api_key`); the IDE registry keys by id (e.g.
+            // `auracle-agent`). Keep the engine name for the `fetch_ai_key`
+            // handoff (the engine's `_AI_PROVIDERS` whitelist expects it) and
+            // translate to the IDE id for the registry lookup. Without this the
+            // registry lookup misses and a launcher-designated provider never
+            // imports its key into the IDE.
+            let engine_provider = shared.ai_model.provider.trim().to_string();
+            if engine_provider.is_empty() {
                 return;
             }
+            let Some(ide_provider_id) =
+                auracle_connections::engine_provider_to_ide(&engine_provider)
+            else {
+                return;
+            };
 
             // Find the matching visible provider. `AsyncApp::update` returns
             // the closure value directly (async_context.rs:163), so the lookup
             // comes back unwrapped.
-            let Some(provider) = cx.update(|cx| find_provider(&provider_id, cx)) else {
+            let Some(provider) = cx.update(|cx| find_provider(ide_provider_id, cx)) else {
                 return;
             };
 
             // Drive the keychain load before reading `is_authenticated`, to
             // avoid the cold-start race (mirrors `resolve_seed_model` in
-            // auracle_onboarding.rs:214: `cx.update(|cx| provider.authenticate
+            // auracle_onboarding.rs: `cx.update(|cx| provider.authenticate
             // (cx)).await.ok()`). If already authenticated, nothing to import.
             cx.update(|cx| provider.authenticate(cx)).await.log_err();
             if cx.update(|cx| provider.is_authenticated(cx)) {
@@ -242,9 +255,10 @@ impl AuracleSettingsPanel {
 
             // Pull the engine's key (loopback-only handoff) and import it. A
             // 404 (engine holds no key) surfaces as an error we treat as
-            // "nothing to import" — never a fake-authenticated state.
+            // "nothing to import" — never a fake-authenticated state. The
+            // engine vault-key name is what `fetch_ai_key` expects.
             let Ok((_provider, key)) =
-                auracle_connections::fetch_ai_key(http, &provider_id).await
+                auracle_connections::fetch_ai_key(http, &engine_provider).await
             else {
                 return;
             };
@@ -312,7 +326,10 @@ impl AuracleSettingsPanel {
         for (index, field) in self.fields.iter().enumerate() {
             if field.kind == "select" {
                 if let Some(choice) = self.selections.get(&field.name) {
-                    map.insert(field.name.clone(), serde_json::Value::String(choice.clone()));
+                    map.insert(
+                        field.name.clone(),
+                        serde_json::Value::String(choice.clone()),
+                    );
                 }
                 continue;
             }
@@ -472,7 +489,9 @@ impl AuracleSettingsPanel {
         let selection = language_model_to_selection(&model, current.as_ref());
         let provider_id = provider.id().0.to_string();
         let model_id = model.id().0.to_string();
-        let label = SharedString::from(format!("Default model set to {provider_name} · {model_id}."));
+        let label = SharedString::from(format!(
+            "Default model set to {provider_name} · {model_id}."
+        ));
         update_settings_file(fs, cx, move |settings, _cx| {
             let agent = settings.agent.get_or_insert_default();
             agent.default_model = Some(selection);
@@ -490,9 +509,15 @@ impl AuracleSettingsPanel {
         // the engine authenticates with the operator's engine-side key (the
         // same one the SEED/import path uses), so the cross-store default stays
         // consistent without round-tripping a secret the IDE can't read.
+        //
+        // Translate the IDE registry id to the engine vault-key name first
+        // (e.g. `auracle-agent` → `deepseek_api_key`); the engine's
+        // `_AI_PROVIDERS` whitelist (settings.py) rejects the raw IDE id with a
+        // 400, which would leave the launcher's view stale.
+        let engine_provider = auracle_connections::ide_provider_to_engine(&provider_id).to_string();
         let http = cx.http_client();
         self._mirror_task = Some(cx.spawn(async move |_this, _cx| {
-            auracle_connections::put_ai_model(http, &provider_id, &model_id, None)
+            auracle_connections::put_ai_model(http, &engine_provider, &model_id, None)
                 .await
                 .log_err();
         }));
@@ -770,8 +795,11 @@ impl AuracleSettingsPanel {
                         label = format!("{label}  (optional)");
                     }
                     let input = if field.kind == "select" {
-                        let selected =
-                            self.selections.get(&field.name).cloned().unwrap_or_default();
+                        let selected = self
+                            .selections
+                            .get(&field.name)
+                            .cloned()
+                            .unwrap_or_default();
                         let mut segmented = h_flex().gap_1();
                         for option in field.options.clone() {
                             let field_name = field.name.clone();
@@ -787,10 +815,12 @@ impl AuracleSettingsPanel {
                                 } else {
                                     ButtonStyle::Outlined
                                 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selections.insert(field_name.clone(), chosen.clone());
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.selections.insert(field_name.clone(), chosen.clone());
+                                        cx.notify();
+                                    },
+                                )),
                             );
                         }
                         segmented.into_any_element()
@@ -805,11 +835,7 @@ impl AuracleSettingsPanel {
                     form = form.child(
                         v_flex()
                             .gap_1()
-                            .child(
-                                Label::new(label)
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
+                            .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                             .child(input),
                     );
                 }
