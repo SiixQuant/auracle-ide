@@ -1,16 +1,15 @@
 mod capability_granter;
 pub mod extension_settings;
 pub mod headless_host;
+mod open_vsx;
 pub mod wasm_host;
 
 #[cfg(test)]
 mod extension_store_test;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use client::{Client, proto, telemetry::Telemetry};
-use cloud_api_types::{ExtensionMetadata, ExtensionProvides, GetExtensionsResponse};
+use cloud_api_types::{ExtensionMetadata, ExtensionProvides};
 use collections::{BTreeMap, BTreeSet, FxHashSet, HashSet, btree_map};
 pub use extension::ExtensionManifest;
 use extension::extension_builder::{CompileExtensionOptions, ExtensionBuilder};
@@ -34,7 +33,7 @@ use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Global, Task, TaskExt,
     UpdateGlobal as _, WeakEntity, actions,
 };
-use http_client::{AsyncBody, HttpClient, HttpClientWithUrl};
+use http_client::{HttpClient, HttpClientWithUrl};
 use language::{
     LanguageConfig, LanguageMatcher, LanguageName, LanguageQueries, LoadedLanguage,
     QUERY_FILENAME_PREFIXES, Rope,
@@ -56,12 +55,8 @@ use std::{
     time::{Duration, Instant},
 };
 use task::TaskTemplates;
-use url::Url;
 use util::{ResultExt, paths::RemotePathBuf, rel_path::PathExt};
-use wasm_host::{
-    WasmExtension, WasmHost,
-    wit::{is_supported_wasm_api_version, wasm_api_version_range},
-};
+use wasm_host::{WasmExtension, WasmHost, wit::is_supported_wasm_api_version};
 
 pub use extension::{
     ExtensionLibraryKind, GrammarManifestEntry, OldExtensionManifest, SchemaVersion,
@@ -529,59 +524,46 @@ impl ExtensionStore {
         provides_filter: Option<&BTreeSet<ExtensionProvides>>,
         cx: &mut Context<Self>,
     ) -> Task<Result<Vec<ExtensionMetadata>>> {
-        let version = CURRENT_SCHEMA_VERSION.to_string();
-        let mut query = vec![("max_schema_version", version.as_str())];
-        if let Some(search) = search {
-            query.push(("filter", search));
-        }
-
-        let provides_filter = provides_filter.map(|provides_filter| {
-            provides_filter
-                .iter()
-                .map(|provides| provides.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        });
-        if let Some(provides_filter) = provides_filter.as_deref() {
-            query.push(("provides", provides_filter));
-        }
-
-        self.fetch_extensions_from_api("/extensions", &query, cx)
+        let http_client = self.http_client.clone();
+        let search = search.map(|search| search.to_string());
+        let provides_filter = provides_filter.cloned();
+        cx.spawn(async move |_, _| {
+            let mut extensions =
+                open_vsx::search_extensions(http_client, search, provides_filter).await?;
+            extensions.retain(|extension| !SUPPRESSED_EXTENSIONS.contains(extension.id.as_ref()));
+            Ok(extensions)
+        })
     }
 
     pub fn fetch_extensions_with_update_available(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Task<Result<Vec<ExtensionMetadata>>> {
-        let schema_versions = schema_version_range();
-        let wasm_api_versions = wasm_api_version_range(ReleaseChannel::global(cx));
         let extension_settings = ExtensionSettings::get_global(cx);
         let extension_ids = self
             .extension_index
             .extensions
             .iter()
             .filter(|(id, entry)| !entry.dev && extension_settings.should_auto_update(id))
-            .map(|(id, _)| id.as_ref())
-            .collect::<Vec<_>>()
-            .join(",");
-        let task = self.fetch_extensions_from_api(
-            "/extensions/updates",
-            &[
-                ("min_schema_version", &schema_versions.start().to_string()),
-                ("max_schema_version", &schema_versions.end().to_string()),
-                (
-                    "min_wasm_api_version",
-                    &wasm_api_versions.start().to_string(),
-                ),
-                ("max_wasm_api_version", &wasm_api_versions.end().to_string()),
-                ("ids", &extension_ids),
-            ],
-            cx,
-        );
+            // Only registry-sourced extensions (`namespace.name`) can be looked
+            // up on open VSX; bundled/local extensions have no registry entry.
+            .filter(|(id, _)| id.contains('.'))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let http_client = self.http_client.clone();
         cx.spawn(async move |this, cx| {
-            let extensions = task.await?;
+            let mut latest = Vec::new();
+            for extension_id in extension_ids {
+                if let Some(metadata) =
+                    open_vsx::fetch_latest_metadata(http_client.clone(), extension_id)
+                        .await
+                        .log_err()
+                {
+                    latest.push(metadata);
+                }
+            }
             this.update(cx, |this, _cx| {
-                extensions
+                latest
                     .into_iter()
                     .filter(|extension| {
                         this.extension_index
@@ -601,7 +583,11 @@ impl ExtensionStore {
         extension_id: &str,
         cx: &mut Context<Self>,
     ) -> Task<Result<Vec<ExtensionMetadata>>> {
-        self.fetch_extensions_from_api(&format!("/extensions/{extension_id}"), &[], cx)
+        let http_client = self.http_client.clone();
+        let extension_id: Arc<str> = extension_id.into();
+        cx.spawn(async move |_, _| {
+            open_vsx::fetch_extension_versions(http_client, extension_id).await
+        })
     }
 
     /// Installs any extensions that should be included with Zed by default.
@@ -675,44 +661,6 @@ impl ExtensionStore {
         anyhow::Ok(())
     }
 
-    fn fetch_extensions_from_api(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-        cx: &mut Context<ExtensionStore>,
-    ) -> Task<Result<Vec<ExtensionMetadata>>> {
-        let url = self.http_client.build_zed_api_url(path, query);
-        let http_client = self.http_client.clone();
-        cx.spawn(async move |_, _| {
-            let mut response = http_client
-                .get(url?.as_ref(), AsyncBody::empty(), true)
-                .await?;
-
-            let mut body = Vec::new();
-            response
-                .body_mut()
-                .read_to_end(&mut body)
-                .await
-                .context("error reading extensions")?;
-
-            if response.status().is_client_error() {
-                let text = String::from_utf8_lossy(body.as_slice());
-                bail!(
-                    "status error {}, response: {text:?}",
-                    response.status().as_u16()
-                );
-            }
-
-            let mut response: GetExtensionsResponse = serde_json::from_slice(&body)?;
-
-            response
-                .data
-                .retain(|extension| !SUPPRESSED_EXTENSIONS.contains(extension.id.as_ref()));
-
-            Ok(response.data)
-        })
-    }
-
     pub fn install_extension(
         &mut self,
         extension_id: Arc<str>,
@@ -723,10 +671,13 @@ impl ExtensionStore {
             .detach_and_log_err(cx);
     }
 
-    fn install_or_upgrade_extension_at_endpoint(
+    /// Downloads the `.vsix` for `extension_id` at `version` (or the latest when
+    /// `version` is `None`) from open VSX, converts it into a Zed-compatible
+    /// extension directory, and installs it.
+    fn install_or_upgrade_extension_at_version(
         &mut self,
         extension_id: Arc<str>,
-        url: Url,
+        version: Option<Arc<str>>,
         operation: ExtensionOperation,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
@@ -750,35 +701,53 @@ impl ExtensionStore {
                 }
             });
 
-            cx.background_spawn(async move {
-                let mut response = http_client
-                    .get(url.as_ref(), Default::default(), true)
-                    .await
-                    .context("downloading extension")?;
+            cx.background_spawn({
+                let extension_id = extension_id.clone();
+                async move {
+                    let download_url = open_vsx::resolve_download_url(
+                        http_client.clone(),
+                        extension_id.clone(),
+                        version,
+                    )
+                    .await?;
 
-                let content_length = response
-                    .headers()
-                    .get(http_client::http::header::CONTENT_LENGTH)
-                    .and_then(|value| value.to_str().ok()?.parse::<usize>().ok());
+                    let mut response = http_client
+                        .get(&download_url, Default::default(), true)
+                        .await
+                        .context("downloading extension")?;
 
-                let mut body = BufReader::new(response.body_mut());
-                let mut tar_gz_bytes = Vec::new();
-                body.read_to_end(&mut tar_gz_bytes).await?;
+                    let content_length = response
+                        .headers()
+                        .get(http_client::http::header::CONTENT_LENGTH)
+                        .and_then(|value| value.to_str().ok()?.parse::<usize>().ok());
 
-                if let Some(content_length) = content_length {
-                    let actual_len = tar_gz_bytes.len();
-                    if content_length != actual_len {
-                        bail!(
-                            "downloaded extension size {actual_len} \
-                        does not match content length {content_length}"
-                        );
+                    let mut body = BufReader::new(response.body_mut());
+                    let mut vsix_bytes = Vec::new();
+                    body.read_to_end(&mut vsix_bytes).await?;
+
+                    if let Some(content_length) = content_length {
+                        let actual_len = vsix_bytes.len();
+                        if content_length != actual_len {
+                            bail!(
+                                "downloaded extension size {actual_len} \
+                                does not match content length {content_length}"
+                            );
+                        }
                     }
-                }
 
-                let decompressed_bytes = GzipDecoder::new(BufReader::new(tar_gz_bytes.as_slice()));
-                let archive = Archive::new(decompressed_bytes);
+                    fs.create_dir(&staging_dir)
+                        .await
+                        .context("creating staging dir")?;
+                    let temp_dir =
+                        tempfile::tempdir_in(&staging_dir).context("creating staging temp dir")?;
 
-                let remove_dir = || {
+                    open_vsx::write_extension_from_vsix(
+                        &vsix_bytes,
+                        &extension_id,
+                        temp_dir.path(),
+                    )
+                    .await?;
+
                     fs.remove_dir(
                         &extension_dir,
                         RemoveOptions {
@@ -786,32 +755,17 @@ impl ExtensionStore {
                             ignore_if_not_exists: true,
                         },
                     )
-                };
-
-                let temp_dir = fs
-                    .create_dir(&staging_dir)
+                    .await?;
+                    fs.rename(
+                        temp_dir.path(),
+                        &extension_dir,
+                        RenameOptions {
+                            overwrite: true,
+                            ignore_if_exists: true,
+                            create_parents: true,
+                        },
+                    )
                     .await
-                    .and_then(|()| tempfile::tempdir_in(&staging_dir).map_err(Into::into));
-
-                match temp_dir {
-                    Ok(temp_dir) => {
-                        archive.unpack(temp_dir.path()).await?;
-                        remove_dir().await?;
-                        fs.rename(
-                            temp_dir.path(),
-                            &extension_dir,
-                            RenameOptions {
-                                overwrite: true,
-                                ignore_if_exists: true,
-                                create_parents: true,
-                            },
-                        )
-                        .await
-                    }
-                    Err(_) => {
-                        remove_dir().await?;
-                        archive.unpack(extension_dir).await.map_err(Into::into)
-                    }
                 }
             })
             .await?;
@@ -839,32 +793,9 @@ impl ExtensionStore {
 
     pub fn install_latest_extension(&mut self, extension_id: Arc<str>, cx: &mut Context<Self>) {
         log::info!("installing extension {extension_id} latest version");
-
-        let schema_versions = schema_version_range();
-        let wasm_api_versions = wasm_api_version_range(ReleaseChannel::global(cx));
-
-        let Some(url) = self
-            .http_client
-            .build_zed_api_url(
-                &format!("/extensions/{extension_id}/download"),
-                &[
-                    ("min_schema_version", &schema_versions.start().to_string()),
-                    ("max_schema_version", &schema_versions.end().to_string()),
-                    (
-                        "min_wasm_api_version",
-                        &wasm_api_versions.start().to_string(),
-                    ),
-                    ("max_wasm_api_version", &wasm_api_versions.end().to_string()),
-                ],
-            )
-            .log_err()
-        else {
-            return;
-        };
-
-        self.install_or_upgrade_extension_at_endpoint(
+        self.install_or_upgrade_extension_at_version(
             extension_id,
-            url,
+            None,
             ExtensionOperation::Install,
             cx,
         )
@@ -888,18 +819,7 @@ impl ExtensionStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         log::info!("installing extension {extension_id} {version}");
-        let Some(url) = self
-            .http_client
-            .build_zed_api_url(
-                &format!("/extensions/{extension_id}/{version}/download"),
-                &[],
-            )
-            .log_err()
-        else {
-            return Task::ready(Ok(()));
-        };
-
-        self.install_or_upgrade_extension_at_endpoint(extension_id, url, operation, cx)
+        self.install_or_upgrade_extension_at_version(extension_id, Some(version), operation, cx)
     }
 
     pub fn uninstall_extension(

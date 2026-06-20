@@ -6,6 +6,14 @@ use language_model::LanguageModelRegistry;
 use std::sync::Arc;
 use web_search::{WebSearchProviderId, WebSearchRegistry};
 
+/// Auracle white-label: the hosted Zed-cloud web-search provider is the only
+/// web-search backend, and it is gated on the hosted cloud LLM provider being
+/// the default model. Since Auracle does not register that hosted provider, web
+/// search is disabled. This flag keeps the registration off explicitly; the
+/// `web_search` tool degrades gracefully ("Web search is not available.") when
+/// no provider is active.
+const ENABLE_HOSTED_WEB_SEARCH: bool = false;
+
 pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
     let registry = WebSearchRegistry::global(cx);
     registry.update(cx, |registry, cx| {
@@ -19,6 +27,10 @@ fn register_web_search_providers(
     user_store: Entity<UserStore>,
     cx: &mut Context<WebSearchRegistry>,
 ) {
+    if !ENABLE_HOSTED_WEB_SEARCH {
+        return;
+    }
+
     register_zed_web_search_provider(
         registry,
         client.clone(),

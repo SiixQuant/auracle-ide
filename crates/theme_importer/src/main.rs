@@ -1,6 +1,3 @@
-mod color;
-mod vscode;
-
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -9,47 +6,12 @@ use anyhow::{Context as _, Result};
 use clap::Parser;
 use collections::IndexMap;
 use log::LevelFilter;
-use serde::Deserialize;
 use simplelog::ColorChoice;
 use simplelog::{TermLogger, TerminalMode};
-use theme::{Appearance, AppearanceContent};
 
-use crate::vscode::VsCodeTheme;
-use crate::vscode::VsCodeThemeConverter;
-
-const ZED_THEME_SCHEMA_URL: &str = "https://zed.dev/schema/themes/v0.2.0.json";
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThemeAppearanceJson {
-    Light,
-    Dark,
-}
-
-impl From<ThemeAppearanceJson> for AppearanceContent {
-    fn from(value: ThemeAppearanceJson) -> Self {
-        match value {
-            ThemeAppearanceJson::Light => Self::Light,
-            ThemeAppearanceJson::Dark => Self::Dark,
-        }
-    }
-}
-
-impl From<ThemeAppearanceJson> for Appearance {
-    fn from(value: ThemeAppearanceJson) -> Self {
-        match value {
-            ThemeAppearanceJson::Light => Self::Light,
-            ThemeAppearanceJson::Dark => Self::Dark,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ThemeMetadata {
-    pub name: String,
-    pub file_name: String,
-    pub appearance: ThemeAppearanceJson,
-}
+use theme_importer::{
+    ThemeAppearanceJson, ThemeMetadata, VsCodeTheme, VsCodeThemeConverter, ZED_THEME_SCHEMA_URL,
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

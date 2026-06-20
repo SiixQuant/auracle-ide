@@ -21,6 +21,7 @@ pub struct WorkspaceSettings {
     pub autosave: AutosaveSetting,
     pub restore_on_startup: settings::RestoreOnStartupBehavior,
     pub cli_default_open_behavior: settings::CliDefaultOpenBehavior,
+    pub default_open_behavior: settings::DefaultOpenBehavior,
     pub restore_on_file_reopen: bool,
     pub drop_target_size: f32,
     pub use_system_path_prompts: bool,
@@ -101,6 +102,7 @@ impl Settings for WorkspaceSettings {
             autosave: workspace.autosave.unwrap(),
             restore_on_startup: workspace.restore_on_startup.unwrap(),
             cli_default_open_behavior: workspace.cli_default_open_behavior.unwrap(),
+            default_open_behavior: workspace.default_open_behavior.unwrap(),
             restore_on_file_reopen: workspace.restore_on_file_reopen.unwrap(),
             drop_target_size: workspace.drop_target_size.unwrap(),
             use_system_path_prompts: workspace.use_system_path_prompts.unwrap(),
@@ -160,6 +162,10 @@ pub struct StatusBarSettings {
     pub cursor_position_button: bool,
     pub line_endings_button: bool,
     pub active_encoding_button: EncodingDisplayOptions,
+    pub active_toolchain_button: bool,
+    pub vim_mode_button: bool,
+    pub image_info_button: bool,
+    pub edit_prediction_button: bool,
 }
 
 impl Settings for StatusBarSettings {
@@ -172,6 +178,10 @@ impl Settings for StatusBarSettings {
             cursor_position_button: status_bar.cursor_position_button.unwrap(),
             line_endings_button: status_bar.line_endings_button.unwrap(),
             active_encoding_button: status_bar.active_encoding_button.unwrap(),
+            active_toolchain_button: status_bar.active_toolchain_button.unwrap(),
+            vim_mode_button: status_bar.vim_mode_button.unwrap(),
+            image_info_button: status_bar.image_info_button.unwrap(),
+            edit_prediction_button: status_bar.edit_prediction_button.unwrap(),
         }
     }
 }

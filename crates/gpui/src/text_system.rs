@@ -93,7 +93,7 @@ impl TextSystem {
                 .map(|font| font.family.to_string()),
         );
         names.push(".SystemUIFont".to_string());
-        names.sort();
+        names.sort_unstable();
         names.dedup();
         names
     }
@@ -1182,8 +1182,8 @@ pub fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'a str {
     // and so retained here for backward compatibility.
     match name {
         ".SystemUIFont" => system,
-        ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
-        ".ZedMono" | "Zed Plex Mono" => "Lilex",
+        ".AuracleSans" | ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
+        ".AuracleMono" | ".ZedMono" | "Zed Plex Mono" => "Lilex",
         _ => name,
     }
 }
@@ -1199,8 +1199,12 @@ pub fn font_name_with_fallbacks_shared<'a>(
     // and so retained here for backward compatibility.
     match name.as_str() {
         ".SystemUIFont" => system,
-        ".ZedSans" | "Zed Plex Sans" => const { &SharedString::new_static("IBM Plex Sans") },
-        ".ZedMono" | "Zed Plex Mono" => const { &SharedString::new_static("Lilex") },
+        ".AuracleSans" | ".ZedSans" | "Zed Plex Sans" => {
+            const { &SharedString::new_static("IBM Plex Sans") }
+        }
+        ".AuracleMono" | ".ZedMono" | "Zed Plex Mono" => {
+            const { &SharedString::new_static("Lilex") }
+        }
         _ => name,
     }
 }

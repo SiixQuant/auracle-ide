@@ -54,6 +54,10 @@ pub struct WorkspaceSettingsContent {
     ///
     /// Default: existing_window
     pub cli_default_open_behavior: Option<CliDefaultOpenBehavior>,
+    /// The default behavior when opening projects from the UI.
+    ///
+    /// Default: existing_window
+    pub default_open_behavior: Option<DefaultOpenBehavior>,
     /// Whether to attempt to restore previous file's state when opening it again.
     /// The state is stored per pane.
     /// When disabled, defaults are applied instead of the state restoration.
@@ -425,6 +429,31 @@ pub enum CliDefaultOpenBehavior {
     strum::VariantNames,
 )]
 #[serde(rename_all = "snake_case")]
+pub enum DefaultOpenBehavior {
+    /// Open projects in the current Zed window.
+    #[default]
+    #[strum(serialize = "Add to Existing Window")]
+    ExistingWindow,
+    /// Open projects in a new window.
+    #[strum(serialize = "Open a New Window")]
+    NewWindow,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    Debug,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum RestoreOnStartupBehavior {
     /// Always start with an empty editor tab
     #[serde(alias = "none")]
@@ -488,6 +517,22 @@ pub struct StatusBarSettingsContent {
     ///
     /// Default: non_utf8
     pub active_encoding_button: Option<EncodingDisplayOptions>,
+    /// Whether to show the active toolchain button in the status bar.
+    ///
+    /// Default: false
+    pub active_toolchain_button: Option<bool>,
+    /// Whether to show the vim mode indicator in the status bar.
+    ///
+    /// Default: false
+    pub vim_mode_button: Option<bool>,
+    /// Whether to show the image info button in the status bar.
+    ///
+    /// Default: false
+    pub image_info_button: Option<bool>,
+    /// Whether to show the edit prediction button in the status bar.
+    ///
+    /// Default: false
+    pub edit_prediction_button: Option<bool>,
 }
 
 #[derive(
@@ -705,7 +750,7 @@ pub struct ProjectPanelSettingsContent {
     pub default_width: Option<f32>,
     /// The position of project panel
     ///
-    /// Default: right
+    /// Default: right (Agentic layout), left (Classic layout)
     pub dock: Option<DockSide>,
     /// Spacing between worktree entries in the project panel.
     ///

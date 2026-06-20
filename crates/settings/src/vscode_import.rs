@@ -790,6 +790,10 @@ impl VsCodeSettings {
             cursor_position_button: None,
             line_endings_button: None,
             active_encoding_button: None,
+            active_toolchain_button: None,
+            vim_mode_button: None,
+            image_info_button: None,
+            edit_prediction_button: None,
         })
     }
 
@@ -1011,6 +1015,7 @@ impl VsCodeSettings {
             bottom_dock_layout: None,
             centered_layout: None,
             cli_default_open_behavior: None,
+            default_open_behavior: None,
             close_on_file_delete: None,
             close_panel_on_toggle: None,
             command_aliases: Default::default(),

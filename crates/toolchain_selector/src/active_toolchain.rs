@@ -7,9 +7,10 @@ use gpui::{
 };
 use language::{Buffer, BufferEvent, LanguageName, Toolchain, ToolchainScope};
 use project::{Project, ProjectPath, Toolchains, WorktreeId, toolchain_store::ToolchainStoreEvent};
+use settings::Settings as _;
 use ui::{Button, ButtonCommon, Clickable, LabelSize, SharedString, Tooltip};
 use util::{maybe, rel_path::RelPath};
-use workspace::{HideStatusItem, StatusItemView, Workspace, item::ItemHandle};
+use workspace::{HideStatusItem, StatusBarSettings, StatusItemView, Workspace, item::ItemHandle};
 
 use crate::ToolchainSelector;
 
@@ -233,6 +234,10 @@ impl ActiveToolchain {
 
 impl Render for ActiveToolchain {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !StatusBarSettings::get_global(cx).active_toolchain_button {
+            return div().hidden();
+        }
+
         let Some(active_toolchain) = self.active_toolchain.as_ref() else {
             return div().hidden();
         };

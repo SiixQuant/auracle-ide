@@ -24,7 +24,6 @@ use crate::application_menu::{
 use auto_update::AutoUpdateStatus;
 use call::ActiveCall;
 use client::{Client, UserStore, zed_urls};
-use cloud_api_types::Plan;
 use command_palette_hooks::CommandPaletteFilter;
 
 use gpui::{
@@ -325,7 +324,10 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
-        children.push(self.render_collaborator_list(window, cx).into_any_element());
+        // Auracle does not connect to Zed's collaboration backend, so the
+        // collaborator facepile and the call controls below are never rendered.
+        // The methods are kept compiled (see `render_collaborator_list` /
+        // `render_call_controls`) but are not added to the title bar.
 
         if title_bar_settings.show_onboarding_banner {
             if let Some(banner) = &self.banner {
@@ -362,7 +364,6 @@ impl Render for TitleBar {
                 })
                 .gap_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
                 .when(
@@ -631,7 +632,7 @@ impl TitleBar {
                     Some(recent_projects::RemoteServerProjects::popover(
                         fs,
                         workspace.clone(),
-                        false,
+                        None,
                         window,
                         cx,
                     ))
@@ -658,10 +659,7 @@ impl TitleBar {
                     move |_window, cx| {
                         Tooltip::with_meta(
                             tooltip_title,
-                            Some(&OpenRemote {
-                                from_existing_connection: false,
-                                create_new_window: false,
-                            }),
+                            Some(&OpenRemote::default()),
                             meta.clone(),
                             cx,
                         )
@@ -817,7 +815,7 @@ impl TitleBar {
                 Some(recent_projects::RecentProjects::popover(
                     workspace.clone(),
                     window_project_groups.clone(),
-                    false,
+                    None,
                     focus_handle.clone(),
                     window,
                     cx,
@@ -836,13 +834,7 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action(
-                        "Recent Projects",
-                        &zed_actions::OpenRecent {
-                            create_new_window: false,
-                        },
-                        cx,
-                    )
+                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -874,7 +866,7 @@ impl TitleBar {
                 Some(recent_projects::RecentProjects::popover(
                     workspace.clone(),
                     window_project_groups.clone(),
-                    false,
+                    None,
                     focus_handle.clone(),
                     window,
                     cx,
@@ -893,13 +885,7 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action(
-                        "Recent Projects",
-                        &zed_actions::OpenRecent {
-                            create_new_window: false,
-                        },
-                        cx,
-                    )
+                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -1156,7 +1142,9 @@ impl TitleBar {
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Auracle IDE to Collaborate",
+                    Some(AutoUpdateStatus::Updated { .. }) => {
+                        "Please restart Auracle IDE to Collaborate"
+                    }
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
@@ -1208,32 +1196,24 @@ impl TitleBar {
 
         let user_store = self.user_store.clone();
         let workspace = self.workspace.clone();
-        let user_store_read = user_store.read(cx);
-        let user = user_store_read.current_user();
+        let user = user_store.read(cx).current_user();
 
         let user_avatar = user.as_ref().map(|u| u.avatar_uri.clone());
         let user_login = user.as_ref().map(|u| u.github_login.clone());
 
         let is_signed_in = user.is_some();
 
-        let has_subscription_period = user_store_read.subscription_period().is_some();
-        let plan = user_store_read.plan().filter(|_| {
-            // Since the user might be on the legacy free plan we filter based on whether we have a subscription period.
-            has_subscription_period
-        });
-
-        let has_organization = user_store_read.current_organization().is_some();
-
-        let current_organization = user_store_read.current_organization();
+        let current_organization = user_store.read(cx).current_organization();
         let business_organization = current_organization
             .as_ref()
             .filter(|organization| !organization.is_personal);
-        let organizations: Vec<_> = user_store_read
+        let organizations: Vec<_> = user_store
+            .read(cx)
             .organizations()
             .iter()
-            .map(|org| {
-                let plan = user_store_read.plan_for_organization(&org.id);
-                (org.clone(), plan)
+            .map(|organization| {
+                let plan = user_store.read(cx).plan_for_organization(&organization.id);
+                (organization.clone(), plan)
             })
             .collect();
 
@@ -1293,9 +1273,6 @@ impl TitleBar {
                                     .w_full()
                                     .justify_between()
                                     .child(Label::new(user_login))
-                                    .when(!has_organization, |parent| {
-                                        parent.child(PlanChip::new(plan.unwrap_or(Plan::ZedFree)))
-                                    })
                                     .into_any_element()
                             },
                             move |_, cx| {
@@ -1311,7 +1288,10 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Auracle IDE").color(Color::Accent))
+                                    .child(
+                                        Label::new("Restart to update Auracle IDE")
+                                            .color(Color::Accent),
+                                    )
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1325,7 +1305,7 @@ impl TitleBar {
                         )
                         .separator()
                     })
-                    .when(has_organization, |this| {
+                    .map(|this| {
                         let mut this = this.header("Organization");
 
                         for (organization, plan) in &organizations {

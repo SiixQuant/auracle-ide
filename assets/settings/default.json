@@ -11,7 +11,7 @@
     "light": "Auracle Light",
     "dark": "Auracle Dark",
   },
-  "icon_theme": "Zed (Default)",
+  "icon_theme": "Auracle (Default)",
   // The name of a base set of key bindings to use.
   // This setting can take six values, each named after another
   // text editor:
@@ -24,9 +24,9 @@
   // 6. "TextMate"
   "base_keymap": "VSCode",
   // The name of a font to use for rendering text in the editor
-  // ".ZedMono" currently aliases to Lilex
+  // ".AuracleMono" currently aliases to Lilex
   // but this may change in the future.
-  "buffer_font_family": ".ZedMono",
+  "buffer_font_family": ".AuracleMono",
   // Set the buffer text's font fallbacks, this will be merged with
   // the platform's default fallbacks.
   "buffer_font_fallbacks": null,
@@ -52,9 +52,9 @@
   "buffer_line_height": "comfortable",
   // The name of a font to use for rendering text in the UI
   // You can set this to ".SystemUIFont" to use the system font
-  // ".ZedSans" currently aliases to "IBM Plex Sans", but this may
+  // ".AuracleSans" currently aliases to "IBM Plex Sans", but this may
   // change in the future
-  "ui_font_family": ".ZedSans",
+  "ui_font_family": ".AuracleSans",
   // Set the UI's font fallbacks, this will be merged with the platform's
   // default font fallbacks.
   "ui_font_fallbacks": null,
@@ -154,6 +154,14 @@
   //     that are already part of an open project)
   //         "cli_default_open_behavior": "new_window"
   "cli_default_open_behavior": "existing_window",
+  // The default behavior when opening projects from the UI.
+  //
+  // May take 2 values:
+  //  1. Open projects as a new workspace in the current Zed window's sidebar
+  //         "default_open_behavior": "existing_window"
+  //  2. Open projects in a new window
+  //         "default_open_behavior": "new_window"
+  "default_open_behavior": "existing_window",
   // Whether to attempt to restore previous file's state when opening it again.
   // The state is stored per pane.
   // When disabled, defaults are applied instead of the state restoration.
@@ -527,14 +535,6 @@
     "button_layout": "platform_default",
   },
   "audio": {
-    // Automatically increase or decrease you microphone's volume. This affects how
-    // loud you sound to others.
-    //
-    // Recommended: off (default)
-    // Microphones are too quite in zed, until everyone is on experimental
-    // audio and has auto speaker volume on this will make you very loud
-    // compared to other speakers.
-    "experimental.auto_microphone_volume": false,
     // Select specific output audio device.
     // `null` means use system default.
     // Any unrecognized output device will fall back to system default.
@@ -706,7 +706,9 @@
   // Search options to enable by default when opening new project and buffer searches.
   "search": {
     // Whether to show the project search button in the status bar.
-    "button": true,
+    // Auracle defaults this off to keep the left status region quiet; set to
+    // true to restore the search button.
+    "button": false,
     // Whether to only match on whole words.
     "whole_word": false,
     // Whether to match case sensitively.
@@ -1004,8 +1006,8 @@
     // Maximum length of the commit message title before a warning is shown.
     // Set to 0 to disable.
     //
-    // Default: 72
-    "commit_title_max_length": 72,
+    // Default: 0
+    "commit_title_max_length": 0,
   },
   "message_editor": {
     // Whether to automatically replace emoji shortcodes with emoji characters.
@@ -1112,6 +1114,22 @@
     },
     // When enabled, agent edits will be displayed in single-file editors for review
     "single_file_review": false,
+    // Settings for automatic agent context compaction, which summarizes earlier
+    // messages to free up room in the model's context window once it grows too
+    // large.
+    "auto_compact": {
+      // Whether to automatically compact the agent's context near the limit.
+      "enabled": true,
+      // The threshold at which auto-compaction runs. One of:
+      //   - A percentage string ending in "%" (e.g. "90%"), measured against
+      //     the model's context window. Decimals are allowed (e.g. "95.5%").
+      //   - A positive integer: compact after that many tokens have been used
+      //     (e.g. 100000 compacts after 100,000 tokens are used).
+      //   - A negative integer: compact once that many tokens remain in the
+      //     context window (e.g. -20000 compacts once fewer than 20,000 remain).
+      // 0 is not a valid threshold.
+      "threshold": "90%",
+    },
     // When enabled, show voting thumbs for feedback on agent edits.
     "enable_feedback": true,
     "default_profile": "auracle",
@@ -1167,8 +1185,6 @@
           "skill": true,
           "spawn_agent": true,
           "terminal": true,
-          "update_plan": true,
-          "update_title": true,
           "search_web": true,
         },
       },
@@ -1190,8 +1206,6 @@
           "grep": true,
           "skill": true,
           "spawn_agent": true,
-          "update_plan": true,
-          "update_title": true,
           "search_web": true,
         },
       },
@@ -1522,8 +1536,9 @@
   //
   // Default: false
   "disable_ai": false,
-  // Automatically update Zed. This setting may be ignored on Linux if
-  // installed through a package manager.
+  // Automatically update the IDE. Disabled by default: the Auracle launcher
+  // manages IDE updates from GitHub Releases. This setting may be ignored on
+  // Linux if installed through a package manager.
   "auto_update": false,
   // How to render LSP `textDocument/documentColor` colors in the editor.
   //
@@ -1702,8 +1717,10 @@
   //      "load_direnv": "disabled"
   "load_direnv": "direct",
   "edit_predictions": {
-    // Which edit prediction provider to use.
-    "provider": "zed",
+    // Which edit prediction provider to use. Auracle defaults this off ("none")
+    // because the Zed-hosted edit-prediction (Zeta) service is not available;
+    // users can opt into a BYO provider (e.g. "copilot", "codestral", "ollama").
+    "provider": "none",
     // A list of globs representing files that edit predictions should be disabled for.
     // There's a sensible default list of globs already included.
     // Any addition to this list will be merged with the default list.
@@ -1779,18 +1796,31 @@
   },
   // Status bar-related settings.
   "status_bar": {
+    // Auracle ships an opinionated-but-reversible status bar. The general-IDE
+    // editor-metadata items below default to off so the bar stays focused on
+    // the engine status chip, diagnostics, and background work. Flip any of
+    // these to true to restore the item without a rebuild.
+    //
     // Whether to show the status bar.
     "experimental.show": true,
     // Whether to show the name of the active file in the status bar.
     "show_active_file": false,
     // Whether to show the active language button in the status bar.
-    "active_language_button": true,
+    "active_language_button": false,
     // Whether to show the cursor position button in the status bar.
-    "cursor_position_button": true,
+    "cursor_position_button": false,
     // Whether to show active line endings button in the status bar.
     "line_endings_button": false,
     // Control when to show the active encoding in the status bar.
-    "active_encoding_button": "non_utf8",
+    "active_encoding_button": "disabled",
+    // Whether to show the active toolchain button in the status bar.
+    "active_toolchain_button": false,
+    // Whether to show the vim mode indicator in the status bar.
+    "vim_mode_button": false,
+    // Whether to show the image info button in the status bar.
+    "image_info_button": false,
+    // Whether to show the edit prediction button in the status bar.
+    "edit_prediction_button": false,
   },
   // Settings specific to the terminal
   "terminal": {
@@ -1951,7 +1981,7 @@
     // "font_size": 15,
     // Set the terminal's font family. If this option is not included,
     // the terminal will default to matching the buffer's font family.
-    // "font_family": ".ZedMono",
+    // "font_family": ".AuracleMono",
     // Set the terminal's font fallbacks. If this option is not included,
     // the terminal will default to matching the buffer's font fallbacks.
     // This will be merged with the platform's default font fallbacks
@@ -2394,6 +2424,7 @@
     "anthropic": {
       "api_url": "https://api.anthropic.com",
     },
+    "anthropic_compatible": {},
     "bedrock": {},
     "google": {
       "api_url": "https://generativelanguage.googleapis.com",

@@ -23,7 +23,6 @@ pub use workspace::welcome::ShowWelcome;
 use workspace::welcome::WelcomePage;
 use workspace::{
     AppState, Workspace, WorkspaceId,
-    dock::DockPosition,
     item::{Item, ItemEvent},
     notifications::NotifyResultExt as _,
     open_new, register_serializable_item, with_active_or_new_workspace,
@@ -181,21 +180,16 @@ pub fn init(cx: &mut App) {
 }
 
 pub fn show_onboarding_view(app_state: Arc<AppState>, cx: &mut App) -> Task<anyhow::Result<()>> {
-    telemetry::event!("Onboarding Page Opened");
+    // Auracle does not show Zed's stock onboarding/Welcome page on first open.
+    // Instead, first launch lands on the normal Auracle workspace (the engine
+    // status chip and the Auracle docks are wired in `initialize_workspace`).
+    // The `Onboarding`/`WelcomePage` items remain registered so the
+    // `welcome: open` action still works for users who invoke it explicitly.
     open_new(
         Default::default(),
         app_state,
         cx,
-        |workspace, window, cx| {
-            {
-                workspace.toggle_dock(DockPosition::Left, window, cx);
-                let onboarding_page = Onboarding::new(workspace, cx);
-                workspace.add_item_to_center(Box::new(onboarding_page.clone()), window, cx);
-
-                window.focus(&onboarding_page.focus_handle(cx), cx);
-
-                cx.notify();
-            };
+        |_workspace, _window, cx| {
             let kvp = KeyValueStore::global(cx);
             db::write_and_log(cx, move || async move {
                 kvp.write_kvp(FIRST_OPEN.to_string(), "false".to_string())
@@ -346,7 +340,10 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(Vector::square(VectorName::AuracleLogo, rems(2.5)))
+                                            .child(Vector::square(
+                                                VectorName::AuracleLogo,
+                                                rems(2.5),
+                                            ))
                                             .child(
                                                 v_flex()
                                                     .child(
@@ -485,7 +482,7 @@ pub async fn handle_import_vscode_settings(
                     gpui::PromptLevel::Info,
                     &format!("Could not find or load a {source} settings file"),
                     None,
-                    &["Ok"],
+                    &["OK"],
                 );
                 return;
             }
@@ -501,7 +498,7 @@ pub async fn handle_import_vscode_settings(
                 truncate_and_remove_front(&vscode_settings.path.to_string_lossy(), 128),
             ),
             None,
-            &["Ok", "Cancel"],
+            &["Import", "Cancel"],
         );
         let result = cx.spawn(async move |_| prompt.await.ok()).await;
         if result != Some(0) {
