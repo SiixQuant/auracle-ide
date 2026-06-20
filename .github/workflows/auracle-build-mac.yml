@@ -65,9 +65,19 @@ jobs:
           echo "SDK: $(xcrun --show-sdk-version)"; xcrun -f metal && echo "metal OK"
       - name: Bundle macOS app (aarch64, unsigned)
         run: ./script/bundle-mac aarch64-apple-darwin
+      - name: Emit SHA-256 sidecar
+        # The launcher's IDE auto-updater fails closed without a published
+        # checksum, so every release must carry a `<dmg>.sha256` sidecar in
+        # standard `shasum -a 256` format (`<hex>  <filename>`). Emitting it
+        # here means the build artifact (and any release cut from it) always
+        # has it — never hand-publish a .dmg without its checksum.
+        working-directory: target/aarch64-apple-darwin/release
+        run: shasum -a 256 Auracle-aarch64.dmg > Auracle-aarch64.dmg.sha256
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: Auracle-IDE-aarch64-dmg
-          path: target/aarch64-apple-darwin/release/Auracle-aarch64.dmg
+          path: |
+            target/aarch64-apple-darwin/release/Auracle-aarch64.dmg
+            target/aarch64-apple-darwin/release/Auracle-aarch64.dmg.sha256
           if-no-files-found: error
