@@ -19,6 +19,7 @@ members = [
     "crates/auracle_cockpit",
     "crates/auracle_connect",
     "crates/auracle_connections",
+    "crates/auracle_deploy_gate",
     "crates/auracle_onboarding",
     "crates/auracle_status",
     "crates/auto_update",
@@ -445,6 +446,7 @@ auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_connections = { path = "crates/auracle_connections" }
+auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_status = { path = "crates/auracle_status" }
 blotter_panel = { path = "crates/blotter_panel" }

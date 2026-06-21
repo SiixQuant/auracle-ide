@@ -13,6 +13,7 @@
 use std::path::PathBuf;
 
 use auracle_connections::{get_json, post_json};
+use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
 use editor::Editor;
 use gpui::{Context, EventEmitter, Task};
 use ui::{Tooltip, prelude::*};
@@ -38,30 +39,6 @@ enum ActionState {
     Running,
     Ok(SharedString),
     Error(SharedString),
-}
-
-/// What a Deploy click should do, given whether a live deploy is already armed
-/// (`awaiting_confirm`) and the FRESH `live_allowed` re-checked at click time.
-/// A live (real-money) deploy is never sent on a first click — it must be armed
-/// then confirmed; a click while live isn't permitted is a safe paper deploy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeployDecision {
-    ArmConfirm,
-    SubmitLive,
-    SubmitPaper,
-}
-
-fn decide_deploy(awaiting_confirm: bool, live_allowed: bool) -> DeployDecision {
-    match (awaiting_confirm, live_allowed) {
-        // Confirming click + still permitted → send the live deploy.
-        (true, true) => DeployDecision::SubmitLive,
-        // Live was revoked between arming and confirming → fall back to paper.
-        (true, false) => DeployDecision::SubmitPaper,
-        // First click, live permitted → arm a confirmation, never auto-send live.
-        (false, true) => DeployDecision::ArmConfirm,
-        // Live not permitted → a paper deploy is safe to send immediately.
-        (false, false) => DeployDecision::SubmitPaper,
-    }
 }
 
 /// The per-strategy data-feed status. `Stale` is intentionally never produced:
@@ -520,18 +497,6 @@ async fn poll_feed(
     }
 }
 
-/// Read the engine's global live-vs-paper truth (`/ui/api/capabilities` ->
-/// `live_allowed`), the same field the engine status chip uses.
-async fn poll_live_allowed(http: std::sync::Arc<dyn http_client::HttpClient>) -> bool {
-    match get_json(http, "/ui/api/capabilities").await {
-        Ok(value) => value
-            .get("live_allowed")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
 fn backtest_summary(value: &serde_json::Value) -> SharedString {
     if let Some(stats) = value.get("stats") {
         let total = stats
@@ -638,17 +603,5 @@ mod tests {
             "strategies.example_ma.MACrossover"
         );
         assert_eq!(url_encode("a b&c"), "a%20b%26c");
-    }
-
-    #[test]
-    fn deploy_gate_never_auto_sends_live() {
-        // First click while live is permitted only ARMS a confirmation.
-        assert_eq!(decide_deploy(false, true), DeployDecision::ArmConfirm);
-        // Confirming click while still permitted sends the live deploy.
-        assert_eq!(decide_deploy(true, true), DeployDecision::SubmitLive);
-        // Live not permitted → a paper deploy is safe to send immediately.
-        assert_eq!(decide_deploy(false, false), DeployDecision::SubmitPaper);
-        // Live revoked between arming and confirming → fall back to paper.
-        assert_eq!(decide_deploy(true, false), DeployDecision::SubmitPaper);
     }
 }

@@ -1398,6 +1398,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connections",
+ "auracle_deploy_gate",
  "editor",
  "gpui",
  "http_client",
@@ -1438,6 +1439,14 @@ dependencies = [
  "serde_json",
  "ui",
  "workspace",
+]
+
+[[package]]
+name = "auracle_deploy_gate"
+version = "0.1.0"
+dependencies = [
+ "auracle_connections",
+ "http_client",
 ]
 
 [[package]]
