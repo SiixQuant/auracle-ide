@@ -7,7 +7,9 @@
 //! `/backtest` route returns — it never fabricates a number the engine didn't
 //! send (missing stats render as an em dash).
 
-use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, Render, Window};
+use auracle_connections::post_json;
+use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
+use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, Render, Task, Window};
 use ui::prelude::*;
 use workspace::{Workspace, item::Item};
 
@@ -90,10 +92,26 @@ fn stat(label: &'static str, value: SharedString) -> impl IntoElement {
         .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
 }
 
+/// The state of the results tab's deploy verb.
+#[derive(Clone, Default)]
+enum DeployState {
+    #[default]
+    Idle,
+    Running,
+    Done(SharedString),
+    Failed(SharedString),
+}
+
 /// The results tab view. Opened via [`open_backtest_results`].
 pub struct BacktestResultsView {
     focus_handle: FocusHandle,
     summary: BacktestSummary,
+    deploy: DeployState,
+    /// Two-step guard for a live (real-money) deploy: armed on the first click,
+    /// sent only on the confirming second click — the exact contract the cockpit
+    /// uses, via the shared `auracle_deploy_gate`.
+    awaiting_live_confirm: bool,
+    _deploy_task: Option<Task<()>>,
 }
 
 impl BacktestResultsView {
@@ -101,6 +119,9 @@ impl BacktestResultsView {
         Self {
             focus_handle: cx.focus_handle(),
             summary,
+            deploy: DeployState::Idle,
+            awaiting_live_confirm: false,
+            _deploy_task: None,
         }
     }
 
@@ -110,6 +131,134 @@ impl BacktestResultsView {
         } else {
             self.summary.strategy.clone()
         }
+    }
+
+    /// The dotted engine strategy path this result belongs to, if known.
+    fn strategy_path(&self) -> Option<SharedString> {
+        if self.summary.strategy.is_empty() {
+            None
+        } else {
+            Some(self.summary.strategy.clone())
+        }
+    }
+
+    /// Submit a paper deploy immediately — paper is always safe, one click.
+    fn paper_trade(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_deploy(true, cx);
+    }
+
+    /// A live (real-money) deploy: re-check permission FRESH at click time and
+    /// arm-then-confirm via the shared gate. Never auto-sends live on a first
+    /// click; falls back to paper if live was revoked between arm and confirm.
+    fn deploy_live(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(strategy_path) = self.strategy_path() else {
+            return;
+        };
+        let http = cx.http_client();
+        let awaiting = self.awaiting_live_confirm;
+        self.deploy = DeployState::Running;
+        cx.notify();
+        self._deploy_task = Some(cx.spawn(async move |this, cx| {
+            let live_allowed = poll_live_allowed(http.clone()).await;
+            let decision = decide_deploy(awaiting, live_allowed);
+            if decision == DeployDecision::ArmConfirm {
+                this.update(cx, |this, cx| {
+                    this.awaiting_live_confirm = true;
+                    this.deploy = DeployState::Idle;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            }
+            let paper = decision == DeployDecision::SubmitPaper;
+            let result = post_json(
+                http,
+                "/ui/api/deploy/new",
+                serde_json::json!({ "strategy_path": strategy_path, "paper": paper }),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                this.awaiting_live_confirm = false;
+                this.deploy = deploy_state_from(result, paper);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn submit_deploy(&mut self, paper: bool, cx: &mut Context<Self>) {
+        let Some(strategy_path) = self.strategy_path() else {
+            return;
+        };
+        let http = cx.http_client();
+        self.deploy = DeployState::Running;
+        cx.notify();
+        self._deploy_task = Some(cx.spawn(async move |this, cx| {
+            let result = post_json(
+                http,
+                "/ui/api/deploy/new",
+                serde_json::json!({ "strategy_path": strategy_path, "paper": paper }),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                this.deploy = deploy_state_from(result, paper);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// The one gated verb: Paper-trade (one click) + Deploy live (arm/confirm).
+    /// Only shown when the result belongs to a known strategy.
+    fn render_deploy_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_strategy = self.strategy_path().is_some();
+        let running = matches!(self.deploy, DeployState::Running);
+        let live_label = if self.awaiting_live_confirm {
+            "Confirm live deploy"
+        } else {
+            "Deploy live"
+        };
+        let status: Option<SharedString> = match &self.deploy {
+            DeployState::Idle => None,
+            DeployState::Running => Some("Deploying…".into()),
+            DeployState::Done(message) | DeployState::Failed(message) => Some(message.clone()),
+        };
+        h_flex()
+            .gap_2()
+            .when(has_strategy, |this| {
+                this.child(
+                    Button::new("studio-paper-trade", "Paper-trade")
+                        .label_size(LabelSize::Small)
+                        .disabled(running)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.paper_trade(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new("studio-deploy-live", live_label)
+                        .label_size(LabelSize::Small)
+                        .disabled(running)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.deploy_live(window, cx)),
+                        ),
+                )
+            })
+            .children(
+                status.map(|message| {
+                    Label::new(message).size(LabelSize::Small).color(Color::Muted)
+                }),
+            )
+    }
+}
+
+fn deploy_state_from<E: std::fmt::Display>(
+    result: Result<serde_json::Value, E>,
+    paper: bool,
+) -> DeployState {
+    let target = if paper { "paper" } else { "live" };
+    match result {
+        Ok(_) => DeployState::Done(format!("Deployed to {target}.").into()),
+        Err(error) => DeployState::Failed(format!("Deploy failed: {error}.").into()),
     }
 }
 
@@ -168,6 +317,7 @@ impl Render for BacktestResultsView {
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
+            .child(self.render_deploy_bar(cx))
     }
 }
 

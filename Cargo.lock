@@ -1396,6 +1396,8 @@ dependencies = [
 name = "auracle_backtest_results"
 version = "0.1.0"
 dependencies = [
+ "auracle_connections",
+ "auracle_deploy_gate",
  "gpui",
  "serde_json",
  "ui",
