@@ -314,6 +314,14 @@ impl BacktestResultsView {
         };
         h_flex()
             .gap_2()
+            .child(
+                // Cross-link to where runs live (the Runs dock). The reverse
+                // link (a Runs row opening its results tab) needs richer run
+                // events from the engine and is tracked separately.
+                Button::new("studio-view-runs", "View in Runs").on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(runs_dock::ToggleFocus), cx);
+                }),
+            )
             .when(has_strategy, |this| {
                 this.child(
                     Button::new("studio-paper-trade", "Paper-trade")

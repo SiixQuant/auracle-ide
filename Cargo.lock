@@ -1399,6 +1399,7 @@ dependencies = [
  "auracle_connections",
  "auracle_deploy_gate",
  "gpui",
+ "runs_dock",
  "serde_json",
  "ui",
  "workspace",

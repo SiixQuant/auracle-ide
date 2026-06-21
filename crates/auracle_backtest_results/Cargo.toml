@@ -16,6 +16,7 @@ workspace = true
 auracle_connections.workspace = true
 auracle_deploy_gate.workspace = true
 gpui.workspace = true
+runs_dock.workspace = true
 serde_json.workspace = true
 ui.workspace = true
 workspace.workspace = true
