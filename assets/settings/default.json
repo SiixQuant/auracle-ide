@@ -523,10 +523,11 @@
     "show_onboarding_banner": true,
     // Whether to show user picture in the titlebar.
     "show_user_picture": true,
-    // Whether to show the user menu in the titlebar. Auracle white-label:
-    // off — the Zed account/avatar dropdown opens zed.dev, which Auracle
-    // does not use (Auracle connects to its own engine, not a Zed account).
-    "show_user_menu": false,
+    // Whether to show the account/settings menu in the titlebar. Auracle: on —
+    // the menu is now a generic gear control with real Auracle rows (Settings,
+    // Keymap, Themes, Extensions, panel layout, update); the dead Zed account /
+    // avatar / org / sign-out rows were removed.
+    "show_user_menu": true,
     // Whether to show the sign in button in the titlebar.
     "show_sign_in": false,
     // Whether to show the menus in the titlebar.
