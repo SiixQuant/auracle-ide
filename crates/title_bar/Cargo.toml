@@ -31,6 +31,7 @@ test-support = [
 [dependencies]
 agent_settings.workspace = true
 anyhow.workspace = true
+auracle_onboarding.workspace = true
 auto_update.workspace = true
 fs.workspace = true
 platform_title_bar.workspace = true

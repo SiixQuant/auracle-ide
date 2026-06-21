@@ -7,6 +7,7 @@ mod update_version;
 use crate::application_menu::{ApplicationMenu, show_menus};
 use agent_settings::{AgentSettings, WindowLayout};
 use arrayvec::ArrayVec;
+use auracle_onboarding::OpenConnections;
 use git_ui::worktree_picker::WorktreePicker;
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
@@ -1238,6 +1239,7 @@ impl TitleBar {
                         .separator()
                     })
                     .action("Settings", zed_actions::OpenSettings.boxed_clone())
+                    .action("Connections & AI Model", OpenConnections.boxed_clone())
                     .action("Keymap", Box::new(zed_actions::OpenKeymap))
                     .action(
                         "Themes…",
