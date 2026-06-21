@@ -1393,6 +1393,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_backtest_results"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_cockpit"
 version = "0.1.0"
 dependencies = [
