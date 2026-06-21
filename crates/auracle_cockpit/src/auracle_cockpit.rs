@@ -20,16 +20,29 @@ use gpui::{Context, EventEmitter, Task, WeakEntity};
 use ui::{Tooltip, prelude::*};
 use workspace::{ItemHandle, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace};
 
+/// The outcome of resolving the active `.py` against the engine's listing.
+/// Distinguishing these is what lets the cockpit be honest: "can't reach the
+/// engine" and "this file isn't a strategy" are different problems.
+#[derive(Clone, Debug, PartialEq)]
+enum ResolveState {
+    /// Resolve in flight.
+    Resolving,
+    /// Matched a dotted engine strategy path (`strategies.module.Class`).
+    Strategy(String),
+    /// Engine reachable, but no strategy matches this file.
+    NotAStrategy,
+    /// The engine could not be reached.
+    EngineUnreachable,
+}
+
 /// Whether the cockpit is showing, and for which strategy.
 enum CockpitVisibility {
     Hidden,
     Shown {
         /// Absolute path of the active `.py` buffer.
         file_path: PathBuf,
-        /// The dotted engine strategy path (`strategies.module.Class`), once
-        /// resolved against the engine's strategy listing. `None` while the
-        /// resolve is in flight or if the file isn't a recognized strategy.
-        strategy_path: Option<String>,
+        /// Resolution of this file against the engine's strategy listing.
+        resolve: ResolveState,
     },
 }
 
@@ -98,7 +111,7 @@ impl StrategyCockpit {
     fn active_strategy_path(&self) -> Option<&str> {
         match &self.visibility {
             CockpitVisibility::Shown {
-                strategy_path: Some(path),
+                resolve: ResolveState::Strategy(path),
                 ..
             } => Some(path.as_str()),
             _ => None,
@@ -114,7 +127,7 @@ impl StrategyCockpit {
         let Some(module) = strategy_module_from_path(&file_path) else {
             self.visibility = CockpitVisibility::Shown {
                 file_path,
-                strategy_path: None,
+                resolve: ResolveState::NotAStrategy,
             };
             self.feed = FeedState::Unknown;
             cx.notify();
@@ -123,7 +136,7 @@ impl StrategyCockpit {
 
         self.visibility = CockpitVisibility::Shown {
             file_path,
-            strategy_path: None,
+            resolve: ResolveState::Resolving,
         };
         self.feed = FeedState::Unknown;
         // A pending live-deploy confirmation must not carry across a context
@@ -133,10 +146,10 @@ impl StrategyCockpit {
 
         let http = cx.http_client();
         self._context_task = Some(cx.spawn(async move |this, cx| {
-            let resolved = resolve_strategy_path(http.clone(), &module).await;
+            let resolution = resolve_strategy_path(http.clone(), &module).await;
 
-            let (feed, live_allowed) = if let Some(strategy_path) = resolved.clone() {
-                let feed = poll_feed(http.clone(), &strategy_path).await;
+            let (feed, live_allowed) = if let ResolveState::Strategy(strategy_path) = &resolution {
+                let feed = poll_feed(http.clone(), strategy_path).await;
                 let live_allowed = poll_live_allowed(http.clone()).await;
                 (feed, live_allowed)
             } else {
@@ -144,8 +157,8 @@ impl StrategyCockpit {
             };
 
             this.update(cx, |this, cx| {
-                if let CockpitVisibility::Shown { strategy_path, .. } = &mut this.visibility {
-                    *strategy_path = resolved;
+                if let CockpitVisibility::Shown { resolve, .. } = &mut this.visibility {
+                    *resolve = resolution;
                 }
                 this.feed = feed;
                 this.deploy_live_allowed = live_allowed;
@@ -302,7 +315,7 @@ impl Render for StrategyCockpit {
         let resolved = matches!(
             self.visibility,
             CockpitVisibility::Shown {
-                strategy_path: Some(_),
+                resolve: ResolveState::Strategy(_),
                 ..
             }
         );
@@ -318,7 +331,17 @@ impl Render for StrategyCockpit {
             "Deploy (paper)"
         };
 
-        let unresolved_tooltip = "No engine strategy matches this file. Add a Strategy subclass under the strategies path.";
+        let unresolved_tooltip = match &self.visibility {
+            CockpitVisibility::Shown {
+                resolve: ResolveState::EngineUnreachable,
+                ..
+            } => "Can't reach the engine — check your connection in Settings.",
+            CockpitVisibility::Shown {
+                resolve: ResolveState::Resolving,
+                ..
+            } => "Resolving this file against the engine…",
+            _ => "No engine strategy matches this file. Add a Strategy subclass under the strategies path.",
+        };
 
         h_flex()
             .id("strategy-cockpit")
@@ -470,20 +493,37 @@ fn strategy_module_from_path(file_path: &std::path::Path) -> Option<String> {
     Some(module_parts.join("."))
 }
 
-/// Match the derived module against the engine's strategy listing, returning the
-/// full dotted `strategies.module.Class` path the action endpoints expect.
+/// Match the derived module against the engine's strategy listing. Returns
+/// `EngineUnreachable` on a transport error so the cockpit can say so honestly
+/// instead of conflating it with "this file isn't a strategy".
 async fn resolve_strategy_path(
     http: std::sync::Arc<dyn http_client::HttpClient>,
     module: &str,
-) -> Option<String> {
-    let value = get_json(http, "/ui/api/backtest/strategies").await.ok()?;
-    let strategies = value.get("strategies")?.as_array()?;
+) -> ResolveState {
+    match get_json(http, "/ui/api/backtest/strategies").await {
+        Ok(value) => match_strategy(&value, module),
+        Err(_) => ResolveState::EngineUnreachable,
+    }
+}
+
+/// Pure matcher over the engine's strategy listing (engine reachable). Yields
+/// `Strategy` on a match, `NotAStrategy` otherwise.
+fn match_strategy(value: &serde_json::Value, module: &str) -> ResolveState {
     let module_prefix = format!("{module}.");
-    strategies
-        .iter()
-        .filter_map(|item| item.get("path").and_then(|path| path.as_str()))
-        .find(|path| path.starts_with(&module_prefix) || *path == module)
-        .map(str::to_owned)
+    let matched = value
+        .get("strategies")
+        .and_then(|strategies| strategies.as_array())
+        .and_then(|strategies| {
+            strategies
+                .iter()
+                .filter_map(|item| item.get("path").and_then(|path| path.as_str()))
+                .find(|path| path.starts_with(&module_prefix) || *path == module)
+                .map(str::to_owned)
+        });
+    match matched {
+        Some(path) => ResolveState::Strategy(path),
+        None => ResolveState::NotAStrategy,
+    }
 }
 
 /// Report per-strategy data-feed presence from the deploy preflight's `data`
@@ -590,6 +630,27 @@ fn url_encode(value: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn match_strategy_distinguishes_match_from_no_match() {
+        let listing = serde_json::json!({
+            "strategies": [{ "path": "strategies.gap.OvernightGapReversion" }]
+        });
+        assert_eq!(
+            match_strategy(&listing, "strategies.gap"),
+            ResolveState::Strategy("strategies.gap.OvernightGapReversion".to_string())
+        );
+        assert_eq!(
+            match_strategy(&listing, "strategies.other"),
+            ResolveState::NotAStrategy
+        );
+        // A reachable engine with an unexpected shape is "not a strategy",
+        // never confused with unreachable (which is the transport-error path).
+        assert_eq!(
+            match_strategy(&serde_json::json!({}), "strategies.gap"),
+            ResolveState::NotAStrategy
+        );
+    }
 
     #[test]
     fn derives_module_from_strategies_path() {
