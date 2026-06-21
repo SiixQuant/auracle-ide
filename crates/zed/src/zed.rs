@@ -1426,7 +1426,7 @@ fn initialize_pane(
             let basedpyright_banner = cx.new(|cx| BasedPyrightBanner::new(workspace, cx));
             toolbar.add_item(basedpyright_banner, window, cx);
             let strategy_cockpit =
-                cx.new(|cx| auracle_cockpit::StrategyCockpit::new(workspace, cx));
+                cx.new(|cx| auracle_cockpit::StrategyCockpit::new(workspace_handle.clone(), cx));
             toolbar.add_item(strategy_cockpit, window, cx);
             let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
             toolbar.add_item(image_view_toolbar, window, cx);

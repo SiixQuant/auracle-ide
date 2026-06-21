@@ -1407,6 +1407,7 @@ name = "auracle_cockpit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "auracle_backtest_results",
  "auracle_connections",
  "auracle_deploy_gate",
  "editor",

@@ -12,10 +12,11 @@
 
 use std::path::PathBuf;
 
+use auracle_backtest_results::{BacktestSummary, open_backtest_results};
 use auracle_connections::{get_json, post_json};
 use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
 use editor::Editor;
-use gpui::{Context, EventEmitter, Task};
+use gpui::{Context, EventEmitter, Task, WeakEntity};
 use ui::{Tooltip, prelude::*};
 use workspace::{ItemHandle, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace};
 
@@ -53,6 +54,9 @@ enum FeedState {
 }
 
 pub struct StrategyCockpit {
+    /// Handle to the workspace, used to open the Studio results tab after a
+    /// backtest completes.
+    workspace: WeakEntity<Workspace>,
     visibility: CockpitVisibility,
     backtest: ActionState,
     validate: ActionState,
@@ -76,8 +80,9 @@ pub struct StrategyCockpit {
 }
 
 impl StrategyCockpit {
-    pub fn new(_workspace: &Workspace, _cx: &mut Context<Self>) -> Self {
+    pub fn new(workspace: WeakEntity<Workspace>, _cx: &mut Context<Self>) -> Self {
         Self {
+            workspace,
             visibility: CockpitVisibility::Hidden,
             backtest: ActionState::Idle,
             validate: ActionState::Idle,
@@ -150,28 +155,42 @@ impl StrategyCockpit {
         }));
     }
 
-    fn run_backtest(&mut self, cx: &mut Context<Self>) {
+    fn run_backtest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(strategy_path) = self.active_strategy_path().map(str::to_owned) else {
             return;
         };
         let http = cx.http_client();
+        let workspace = self.workspace.clone();
+        let title = strategy_path.clone();
         self.backtest = ActionState::Running;
         cx.notify();
-        self._action_task = Some(cx.spawn(async move |this, cx| {
+        self._action_task = Some(cx.spawn_in(window, async move |this, cx| {
             let body = serde_json::json!({ "strategy_path": strategy_path });
             let result = post_json(http, "/backtest", body).await;
-            this.update(cx, |this, cx| {
-                this.backtest = match result {
-                    Ok(value) => ActionState::Ok(backtest_summary(&value)),
-                    Err(error) => ActionState::Error(format!("Backtest failed: {error}.").into()),
-                };
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(value) => {
+                        this.backtest = ActionState::Ok(backtest_summary(&value));
+                        // Open the results in a Studio tab beside the code.
+                        let summary = BacktestSummary::from_engine(title, &value);
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                open_backtest_results(workspace, summary, window, cx);
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        this.backtest =
+                            ActionState::Error(format!("Backtest failed: {error}.").into());
+                    }
+                }
                 cx.notify();
             })
             .ok();
         }));
     }
 
-    fn run_validate(&mut self, cx: &mut Context<Self>) {
+    fn run_validate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(strategy_path) = self.active_strategy_path().map(str::to_owned) else {
             return;
         };
@@ -247,7 +266,7 @@ impl StrategyCockpit {
         state: &ActionState,
         enabled: bool,
         disabled_tooltip: Option<&'static str>,
-        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let running = matches!(state, ActionState::Running);
@@ -261,7 +280,7 @@ impl StrategyCockpit {
             .label_size(LabelSize::Small)
             .disabled(!enabled || running)
             .when(enabled && !running, |this| {
-                this.on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+                this.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
             });
 
         let button = match disabled_tooltip {
