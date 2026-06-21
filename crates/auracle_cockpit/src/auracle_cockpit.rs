@@ -12,11 +12,28 @@
 
 use std::path::PathBuf;
 
+use auracle_backtest_results::{BacktestSummary, open_backtest_results};
 use auracle_connections::{get_json, post_json};
+use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
 use editor::Editor;
-use gpui::{Context, EventEmitter, Task};
+use gpui::{Context, EventEmitter, Task, WeakEntity};
 use ui::{Tooltip, prelude::*};
 use workspace::{ItemHandle, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace};
+
+/// The outcome of resolving the active `.py` against the engine's listing.
+/// Distinguishing these is what lets the cockpit be honest: "can't reach the
+/// engine" and "this file isn't a strategy" are different problems.
+#[derive(Clone, Debug, PartialEq)]
+enum ResolveState {
+    /// Resolve in flight.
+    Resolving,
+    /// Matched a dotted engine strategy path (`strategies.module.Class`).
+    Strategy(String),
+    /// Engine reachable, but no strategy matches this file.
+    NotAStrategy,
+    /// The engine could not be reached.
+    EngineUnreachable,
+}
 
 /// Whether the cockpit is showing, and for which strategy.
 enum CockpitVisibility {
@@ -24,10 +41,8 @@ enum CockpitVisibility {
     Shown {
         /// Absolute path of the active `.py` buffer.
         file_path: PathBuf,
-        /// The dotted engine strategy path (`strategies.module.Class`), once
-        /// resolved against the engine's strategy listing. `None` while the
-        /// resolve is in flight or if the file isn't a recognized strategy.
-        strategy_path: Option<String>,
+        /// Resolution of this file against the engine's strategy listing.
+        resolve: ResolveState,
     },
 }
 
@@ -38,30 +53,6 @@ enum ActionState {
     Running,
     Ok(SharedString),
     Error(SharedString),
-}
-
-/// What a Deploy click should do, given whether a live deploy is already armed
-/// (`awaiting_confirm`) and the FRESH `live_allowed` re-checked at click time.
-/// A live (real-money) deploy is never sent on a first click — it must be armed
-/// then confirmed; a click while live isn't permitted is a safe paper deploy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeployDecision {
-    ArmConfirm,
-    SubmitLive,
-    SubmitPaper,
-}
-
-fn decide_deploy(awaiting_confirm: bool, live_allowed: bool) -> DeployDecision {
-    match (awaiting_confirm, live_allowed) {
-        // Confirming click + still permitted → send the live deploy.
-        (true, true) => DeployDecision::SubmitLive,
-        // Live was revoked between arming and confirming → fall back to paper.
-        (true, false) => DeployDecision::SubmitPaper,
-        // First click, live permitted → arm a confirmation, never auto-send live.
-        (false, true) => DeployDecision::ArmConfirm,
-        // Live not permitted → a paper deploy is safe to send immediately.
-        (false, false) => DeployDecision::SubmitPaper,
-    }
 }
 
 /// The per-strategy data-feed status. `Stale` is intentionally never produced:
@@ -76,6 +67,9 @@ enum FeedState {
 }
 
 pub struct StrategyCockpit {
+    /// Handle to the workspace, used to open the Studio results tab after a
+    /// backtest completes.
+    workspace: WeakEntity<Workspace>,
     visibility: CockpitVisibility,
     backtest: ActionState,
     validate: ActionState,
@@ -99,8 +93,9 @@ pub struct StrategyCockpit {
 }
 
 impl StrategyCockpit {
-    pub fn new(_workspace: &Workspace, _cx: &mut Context<Self>) -> Self {
+    pub fn new(workspace: WeakEntity<Workspace>, _cx: &mut Context<Self>) -> Self {
         Self {
+            workspace,
             visibility: CockpitVisibility::Hidden,
             backtest: ActionState::Idle,
             validate: ActionState::Idle,
@@ -116,7 +111,7 @@ impl StrategyCockpit {
     fn active_strategy_path(&self) -> Option<&str> {
         match &self.visibility {
             CockpitVisibility::Shown {
-                strategy_path: Some(path),
+                resolve: ResolveState::Strategy(path),
                 ..
             } => Some(path.as_str()),
             _ => None,
@@ -132,7 +127,7 @@ impl StrategyCockpit {
         let Some(module) = strategy_module_from_path(&file_path) else {
             self.visibility = CockpitVisibility::Shown {
                 file_path,
-                strategy_path: None,
+                resolve: ResolveState::NotAStrategy,
             };
             self.feed = FeedState::Unknown;
             cx.notify();
@@ -141,7 +136,7 @@ impl StrategyCockpit {
 
         self.visibility = CockpitVisibility::Shown {
             file_path,
-            strategy_path: None,
+            resolve: ResolveState::Resolving,
         };
         self.feed = FeedState::Unknown;
         // A pending live-deploy confirmation must not carry across a context
@@ -151,10 +146,10 @@ impl StrategyCockpit {
 
         let http = cx.http_client();
         self._context_task = Some(cx.spawn(async move |this, cx| {
-            let resolved = resolve_strategy_path(http.clone(), &module).await;
+            let resolution = resolve_strategy_path(http.clone(), &module).await;
 
-            let (feed, live_allowed) = if let Some(strategy_path) = resolved.clone() {
-                let feed = poll_feed(http.clone(), &strategy_path).await;
+            let (feed, live_allowed) = if let ResolveState::Strategy(strategy_path) = &resolution {
+                let feed = poll_feed(http.clone(), strategy_path).await;
                 let live_allowed = poll_live_allowed(http.clone()).await;
                 (feed, live_allowed)
             } else {
@@ -162,8 +157,8 @@ impl StrategyCockpit {
             };
 
             this.update(cx, |this, cx| {
-                if let CockpitVisibility::Shown { strategy_path, .. } = &mut this.visibility {
-                    *strategy_path = resolved;
+                if let CockpitVisibility::Shown { resolve, .. } = &mut this.visibility {
+                    *resolve = resolution;
                 }
                 this.feed = feed;
                 this.deploy_live_allowed = live_allowed;
@@ -173,28 +168,42 @@ impl StrategyCockpit {
         }));
     }
 
-    fn run_backtest(&mut self, cx: &mut Context<Self>) {
+    fn run_backtest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(strategy_path) = self.active_strategy_path().map(str::to_owned) else {
             return;
         };
         let http = cx.http_client();
+        let workspace = self.workspace.clone();
+        let title = strategy_path.clone();
         self.backtest = ActionState::Running;
         cx.notify();
-        self._action_task = Some(cx.spawn(async move |this, cx| {
+        self._action_task = Some(cx.spawn_in(window, async move |this, cx| {
             let body = serde_json::json!({ "strategy_path": strategy_path });
             let result = post_json(http, "/backtest", body).await;
-            this.update(cx, |this, cx| {
-                this.backtest = match result {
-                    Ok(value) => ActionState::Ok(backtest_summary(&value)),
-                    Err(error) => ActionState::Error(format!("Backtest failed: {error}.").into()),
-                };
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(value) => {
+                        this.backtest = ActionState::Ok(backtest_summary(&value));
+                        // Open the results in a Studio tab beside the code.
+                        let summary = BacktestSummary::from_engine(title, &value);
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                open_backtest_results(workspace, summary, window, cx);
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        this.backtest =
+                            ActionState::Error(format!("Backtest failed: {error}.").into());
+                    }
+                }
                 cx.notify();
             })
             .ok();
         }));
     }
 
-    fn run_validate(&mut self, cx: &mut Context<Self>) {
+    fn run_validate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(strategy_path) = self.active_strategy_path().map(str::to_owned) else {
             return;
         };
@@ -270,7 +279,7 @@ impl StrategyCockpit {
         state: &ActionState,
         enabled: bool,
         disabled_tooltip: Option<&'static str>,
-        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let running = matches!(state, ActionState::Running);
@@ -284,7 +293,7 @@ impl StrategyCockpit {
             .label_size(LabelSize::Small)
             .disabled(!enabled || running)
             .when(enabled && !running, |this| {
-                this.on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+                this.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
             });
 
         let button = match disabled_tooltip {
@@ -306,7 +315,7 @@ impl Render for StrategyCockpit {
         let resolved = matches!(
             self.visibility,
             CockpitVisibility::Shown {
-                strategy_path: Some(_),
+                resolve: ResolveState::Strategy(_),
                 ..
             }
         );
@@ -322,7 +331,17 @@ impl Render for StrategyCockpit {
             "Deploy (paper)"
         };
 
-        let unresolved_tooltip = "No engine strategy matches this file. Add a Strategy subclass under the strategies path.";
+        let unresolved_tooltip = match &self.visibility {
+            CockpitVisibility::Shown {
+                resolve: ResolveState::EngineUnreachable,
+                ..
+            } => "Can't reach the engine — check your connection in Settings.",
+            CockpitVisibility::Shown {
+                resolve: ResolveState::Resolving,
+                ..
+            } => "Resolving this file against the engine…",
+            _ => "No engine strategy matches this file. Add a Strategy subclass under the strategies path.",
+        };
 
         h_flex()
             .id("strategy-cockpit")
@@ -474,20 +493,37 @@ fn strategy_module_from_path(file_path: &std::path::Path) -> Option<String> {
     Some(module_parts.join("."))
 }
 
-/// Match the derived module against the engine's strategy listing, returning the
-/// full dotted `strategies.module.Class` path the action endpoints expect.
+/// Match the derived module against the engine's strategy listing. Returns
+/// `EngineUnreachable` on a transport error so the cockpit can say so honestly
+/// instead of conflating it with "this file isn't a strategy".
 async fn resolve_strategy_path(
     http: std::sync::Arc<dyn http_client::HttpClient>,
     module: &str,
-) -> Option<String> {
-    let value = get_json(http, "/ui/api/backtest/strategies").await.ok()?;
-    let strategies = value.get("strategies")?.as_array()?;
+) -> ResolveState {
+    match get_json(http, "/ui/api/backtest/strategies").await {
+        Ok(value) => match_strategy(&value, module),
+        Err(_) => ResolveState::EngineUnreachable,
+    }
+}
+
+/// Pure matcher over the engine's strategy listing (engine reachable). Yields
+/// `Strategy` on a match, `NotAStrategy` otherwise.
+fn match_strategy(value: &serde_json::Value, module: &str) -> ResolveState {
     let module_prefix = format!("{module}.");
-    strategies
-        .iter()
-        .filter_map(|item| item.get("path").and_then(|path| path.as_str()))
-        .find(|path| path.starts_with(&module_prefix) || *path == module)
-        .map(str::to_owned)
+    let matched = value
+        .get("strategies")
+        .and_then(|strategies| strategies.as_array())
+        .and_then(|strategies| {
+            strategies
+                .iter()
+                .filter_map(|item| item.get("path").and_then(|path| path.as_str()))
+                .find(|path| path.starts_with(&module_prefix) || *path == module)
+                .map(str::to_owned)
+        });
+    match matched {
+        Some(path) => ResolveState::Strategy(path),
+        None => ResolveState::NotAStrategy,
+    }
 }
 
 /// Report per-strategy data-feed presence from the deploy preflight's `data`
@@ -517,18 +553,6 @@ async fn poll_feed(
             None => FeedState::Unknown,
         },
         Err(_) => FeedState::Unknown,
-    }
-}
-
-/// Read the engine's global live-vs-paper truth (`/ui/api/capabilities` ->
-/// `live_allowed`), the same field the engine status chip uses.
-async fn poll_live_allowed(http: std::sync::Arc<dyn http_client::HttpClient>) -> bool {
-    match get_json(http, "/ui/api/capabilities").await {
-        Ok(value) => value
-            .get("live_allowed")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        Err(_) => false,
     }
 }
 
@@ -608,6 +632,27 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn match_strategy_distinguishes_match_from_no_match() {
+        let listing = serde_json::json!({
+            "strategies": [{ "path": "strategies.gap.OvernightGapReversion" }]
+        });
+        assert_eq!(
+            match_strategy(&listing, "strategies.gap"),
+            ResolveState::Strategy("strategies.gap.OvernightGapReversion".to_string())
+        );
+        assert_eq!(
+            match_strategy(&listing, "strategies.other"),
+            ResolveState::NotAStrategy
+        );
+        // A reachable engine with an unexpected shape is "not a strategy",
+        // never confused with unreachable (which is the transport-error path).
+        assert_eq!(
+            match_strategy(&serde_json::json!({}), "strategies.gap"),
+            ResolveState::NotAStrategy
+        );
+    }
+
+    #[test]
     fn derives_module_from_strategies_path() {
         assert_eq!(
             strategy_module_from_path(Path::new("/opt/auracle/strategies/example_ma.py")),
@@ -638,17 +683,5 @@ mod tests {
             "strategies.example_ma.MACrossover"
         );
         assert_eq!(url_encode("a b&c"), "a%20b%26c");
-    }
-
-    #[test]
-    fn deploy_gate_never_auto_sends_live() {
-        // First click while live is permitted only ARMS a confirmation.
-        assert_eq!(decide_deploy(false, true), DeployDecision::ArmConfirm);
-        // Confirming click while still permitted sends the live deploy.
-        assert_eq!(decide_deploy(true, true), DeployDecision::SubmitLive);
-        // Live not permitted → a paper deploy is safe to send immediately.
-        assert_eq!(decide_deploy(false, false), DeployDecision::SubmitPaper);
-        // Live revoked between arming and confirming → fall back to paper.
-        assert_eq!(decide_deploy(true, false), DeployDecision::SubmitPaper);
     }
 }

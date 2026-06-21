@@ -16,10 +16,13 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auracle_agent_commands",
+    "crates/auracle_backtest_results",
     "crates/auracle_cockpit",
     "crates/auracle_connect",
     "crates/auracle_connections",
+    "crates/auracle_deploy_gate",
     "crates/auracle_onboarding",
+    "crates/auracle_spec_compiler",
     "crates/auracle_status",
     "crates/auto_update",
     "crates/auto_update_helper",
@@ -442,10 +445,13 @@ rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
+auracle_backtest_results = { path = "crates/auracle_backtest_results" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_connections = { path = "crates/auracle_connections" }
+auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
+auracle_spec_compiler = { path = "crates/auracle_spec_compiler" }
 auracle_status = { path = "crates/auracle_status" }
 blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }

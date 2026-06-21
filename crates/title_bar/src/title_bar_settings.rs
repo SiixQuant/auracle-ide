@@ -5,6 +5,9 @@ use settings::{RegisterSetting, Settings, SettingsContent};
 pub struct TitleBarSettings {
     pub show_branch_status_icon: bool,
     pub show_onboarding_banner: bool,
+    // Retained as a valid setting key, but no longer read: the Auracle account
+    // menu uses a generic gear icon, not a per-user avatar.
+    #[allow(dead_code)]
     pub show_user_picture: bool,
     pub show_branch_name: bool,
     pub show_project_items: bool,

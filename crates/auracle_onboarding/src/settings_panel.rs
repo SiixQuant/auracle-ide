@@ -28,7 +28,7 @@ use agent_settings::{AgentSettings, language_model_to_selection};
 use anyhow::Result;
 use futures::AsyncWriteExt as _;
 use gpui::{
-    AnyView, App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels,
+    Action, AnyView, App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels,
     SharedString, Task, WeakEntity, Window, actions, px,
 };
 use language_model::{LanguageModelProvider, LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID};
@@ -1134,6 +1134,62 @@ fn ai_truth_row(ai_model: &AiModelState) -> Option<(String, Color)> {
     })
 }
 
+impl AuracleSettingsPanel {
+    /// Editor preferences, surfaced in the same panel so this is the one merged
+    /// settings home — Auracle connections/AI/engine AND editor prefs together,
+    /// rather than two separate "settings" places.
+    fn render_editor_preferences(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .gap_3()
+            .child(Label::new("Editor preferences").size(LabelSize::Large))
+            .child(
+                Label::new("Themes, keymap, editor settings, and extensions")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        Button::new("settings-editor-open", "Settings").on_click(
+                            |_, window, cx| {
+                                window
+                                    .dispatch_action(zed_actions::OpenSettings.boxed_clone(), cx);
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("settings-editor-themes", "Themes").on_click(
+                            |_, window, cx| {
+                                window.dispatch_action(
+                                    zed_actions::theme_selector::Toggle::default().boxed_clone(),
+                                    cx,
+                                );
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("settings-editor-keymap", "Keymap").on_click(
+                            |_, window, cx| {
+                                window.dispatch_action(Box::new(zed_actions::OpenKeymap), cx);
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("settings-editor-extensions", "Extensions").on_click(
+                            |_, window, cx| {
+                                window.dispatch_action(
+                                    zed_actions::Extensions::default().boxed_clone(),
+                                    cx,
+                                );
+                            },
+                        ),
+                    ),
+            )
+    }
+}
+
 impl Render for AuracleSettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
@@ -1148,6 +1204,7 @@ impl Render for AuracleSettingsPanel {
             .child(self.render_broker(cx))
             .child(self.render_model(cx))
             .child(self.render_github(cx))
+            .child(self.render_editor_preferences(cx))
             .child(self.render_shared_truths(cx))
     }
 }
