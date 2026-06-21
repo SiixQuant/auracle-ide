@@ -318,8 +318,8 @@ impl Render for ConnectModal {
                     .child(
                         Label::new(
                             "Your key is set up automatically by the desktop \
-                             launcher. To enter it by hand, fetch it from \
-                             http://127.0.0.1:1969/ui/api/me/credentials",
+                             launcher. To enter it by hand, fetch it from your \
+                             engine's /ui/api/me/credentials page.",
                         )
                         .size(LabelSize::Small)
                         .color(Color::Muted),
