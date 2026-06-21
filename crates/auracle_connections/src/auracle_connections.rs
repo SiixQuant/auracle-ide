@@ -167,6 +167,9 @@ enum TestState {
 
 pub struct BrokerWizard {
     focus_handle: FocusHandle,
+    // Reserved: set on construction; read once the scoped-wizard slice
+    // pre-targets a broker/asset-kind from a strategy's needs (deferred).
+    #[allow(dead_code)]
     scope: WizardScope,
     step: Step,
     brokers: Vec<BrokerSummary>,
