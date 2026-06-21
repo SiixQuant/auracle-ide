@@ -47,6 +47,63 @@ impl BacktestSummary {
     }
 }
 
+/// Out-of-sample diagnostics from the engine's `/backtest/studio` route. Absent
+/// until that (owner-deployed) route exists, so the tab degrades honestly rather
+/// than inventing robustness it can't compute.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StudioDiagnostics {
+    pub in_sample_sharpe: Option<f64>,
+    pub out_of_sample_sharpe: Option<f64>,
+    pub robustness: Option<f64>,
+    pub sensitivity: SharedString,
+}
+
+impl StudioDiagnostics {
+    pub fn from_engine(value: &serde_json::Value) -> Self {
+        let sharpe = |block: &str| {
+            value
+                .get(block)
+                .and_then(|s| s.get("sharpe"))
+                .and_then(|v| v.as_f64())
+        };
+        Self {
+            in_sample_sharpe: sharpe("in_sample"),
+            out_of_sample_sharpe: sharpe("out_of_sample"),
+            robustness: value.get("robustness").and_then(|v| v.as_f64()),
+            sensitivity: value
+                .get("sensitivity")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string()
+                .into(),
+        }
+    }
+
+    /// Plain-English verdict — honest about out-of-sample decay. The AI never
+    /// celebrates an in-sample number that doesn't survive out-of-sample.
+    fn verdict(&self) -> SharedString {
+        match (self.in_sample_sharpe, self.out_of_sample_sharpe) {
+            (Some(_), Some(oos)) if oos < 0.0 => {
+                "The edge does not survive out-of-sample — I would not deploy this.".into()
+            }
+            (Some(is), Some(oos)) if oos < is * 0.5 => {
+                "The edge weakens sharply out-of-sample — treat it with caution.".into()
+            }
+            (Some(_), Some(_)) => "The edge holds out-of-sample.".into(),
+            _ => "Out-of-sample diagnostics unavailable.".into(),
+        }
+    }
+}
+
+/// Whether the out-of-sample diagnostics have loaded.
+#[derive(Clone, Default)]
+enum DiagState {
+    #[default]
+    Loading,
+    Ready(StudioDiagnostics),
+    Unavailable,
+}
+
 const MISSING: &str = "—";
 
 fn pct(value: Option<f64>) -> SharedString {
@@ -106,23 +163,55 @@ enum DeployState {
 pub struct BacktestResultsView {
     focus_handle: FocusHandle,
     summary: BacktestSummary,
+    diagnostics: DiagState,
     deploy: DeployState,
     /// Two-step guard for a live (real-money) deploy: armed on the first click,
     /// sent only on the confirming second click — the exact contract the cockpit
     /// uses, via the shared `auracle_deploy_gate`.
     awaiting_live_confirm: bool,
     _deploy_task: Option<Task<()>>,
+    _diagnostics_task: Option<Task<()>>,
 }
 
 impl BacktestResultsView {
     pub fn new(summary: BacktestSummary, cx: &mut Context<Self>) -> Self {
-        Self {
+        let mut view = Self {
             focus_handle: cx.focus_handle(),
             summary,
+            diagnostics: DiagState::Loading,
             deploy: DeployState::Idle,
             awaiting_live_confirm: false,
             _deploy_task: None,
-        }
+            _diagnostics_task: None,
+        };
+        view.fetch_diagnostics(cx);
+        view
+    }
+
+    /// Fetch out-of-sample diagnostics from the engine. Fails to `Unavailable`
+    /// (honest) when the route isn't deployed or the strategy is unknown.
+    fn fetch_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let Some(strategy_path) = self.strategy_path() else {
+            self.diagnostics = DiagState::Unavailable;
+            return;
+        };
+        let http = cx.http_client();
+        self._diagnostics_task = Some(cx.spawn(async move |this, cx| {
+            let result = post_json(
+                http,
+                "/backtest/studio",
+                serde_json::json!({ "strategy_path": strategy_path }),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                this.diagnostics = match result {
+                    Ok(value) => DiagState::Ready(StudioDiagnostics::from_engine(&value)),
+                    Err(_) => DiagState::Unavailable,
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     fn title(&self) -> SharedString {
@@ -249,6 +338,40 @@ impl BacktestResultsView {
                 }),
             )
     }
+
+    /// The out-of-sample readout: the honest verdict + in-sample-vs-OOS pairing
+    /// once diagnostics load; an honest placeholder until then.
+    fn render_diagnostics(&self) -> impl IntoElement {
+        match &self.diagnostics {
+            DiagState::Loading => v_flex().child(
+                Label::new("Checking out-of-sample robustness…")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            ),
+            DiagState::Unavailable => v_flex().child(
+                Label::new(
+                    "Out-of-sample robustness arrives once the engine diagnostics route is deployed.",
+                )
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+            ),
+            DiagState::Ready(diagnostics) => v_flex()
+                .gap_2()
+                .child(Label::new(diagnostics.verdict()))
+                .child(
+                    h_flex()
+                        .gap_6()
+                        .flex_wrap()
+                        .child(stat("Sharpe (in-sample)", ratio(diagnostics.in_sample_sharpe)))
+                        .child(stat(
+                            "Sharpe (out-of-sample)",
+                            ratio(diagnostics.out_of_sample_sharpe),
+                        ))
+                        .child(stat("Robustness", ratio(diagnostics.robustness)))
+                        .child(stat("Sensitivity", diagnostics.sensitivity.clone())),
+                ),
+        }
+    }
 }
 
 fn deploy_state_from<E: std::fmt::Display>(
@@ -312,11 +435,7 @@ impl Render for BacktestResultsView {
                     .child(stat("Turnover", turns(summary.turnover)))
                     .child(stat("Trades", count(summary.num_trades))),
             )
-            .child(
-                Label::new("Out-of-sample robustness arrives with the diagnostics route.")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
+            .child(self.render_diagnostics())
             .child(self.render_deploy_bar(cx))
     }
 }
@@ -368,5 +487,26 @@ mod tests {
         assert_eq!(pct(Some(0.161)), SharedString::from("+16.1%"));
         assert_eq!(money(Some(-456.0)), SharedString::from("-$456"));
         assert_eq!(ratio(Some(1.3)), SharedString::from("1.30"));
+    }
+
+    #[test]
+    fn diagnostics_verdict_is_honest_about_oos_decay() {
+        let overfit = serde_json::json!({
+            "in_sample": { "sharpe": 2.8 },
+            "out_of_sample": { "sharpe": -0.2 },
+            "robustness": 0.1, "sensitivity": "high"
+        });
+        let overfit = StudioDiagnostics::from_engine(&overfit);
+        assert_eq!(overfit.out_of_sample_sharpe, Some(-0.2));
+        assert!(overfit.verdict().to_string().contains("does not survive"));
+
+        let healthy = serde_json::json!({
+            "in_sample": { "sharpe": 1.3 },
+            "out_of_sample": { "sharpe": 1.1 },
+            "robustness": 0.78, "sensitivity": "low"
+        });
+        let healthy = StudioDiagnostics::from_engine(&healthy);
+        assert_eq!(healthy.sensitivity, SharedString::from("low"));
+        assert!(healthy.verdict().to_string().contains("holds out-of-sample"));
     }
 }
