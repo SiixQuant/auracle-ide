@@ -45,6 +45,10 @@ actions!(
         ValidateManifest,
         /// Backtest a deployment manifest without any live or paper broker call.
         BacktestManifest,
+        /// Propose strategy variants, prove each out-of-sample, and recommend at most one.
+        ProposeAndProve,
+        /// Two-question intake, then build a real strategy and show its backtest.
+        StartInterview,
     ]
 );
 
@@ -100,6 +104,25 @@ const BACKTEST_MANIFEST: &str = "Ask me for a manifest file path, then run its \
 strategy as a vectorized backtest with no live or paper broker call. Show the \
 target weights and performance stats.";
 
+const PROPOSE_AND_PROVE: &str = "Take the strategy in the active editor (or ask \
+me which one). Propose two or three concrete variations — a different parameter \
+value, an added exit rule, or a simpler signal. For EACH variation, run a \
+backtest AND a rolling out-of-sample walk-forward using the backtest and \
+run_walkforward tools, and present a side-by-side comparison versus the current \
+strategy: in-sample Sharpe, out-of-sample Sharpe, max drawdown, and turnover. \
+Recommend at most one change, and ONLY if it improves out-of-sample robustness — \
+never recommend something that just looks better in-sample. Do not edit my file \
+or deploy anything: show the comparison and the exact diff you would apply, and \
+let me approve it.";
+
+const START_INTERVIEW: &str = "Run a short strategy intake, then build me \
+something real. Ask me at most two quick questions — what markets I follow and \
+how often I want to trade — then propose one concrete, defensible strategy idea, \
+write it as a one-file strategy with a `# %%spec` header that compiles to a \
+Strategy subclass, and run a fast backtest so I can see an equity curve. Stay \
+honest: if the edge looks weak out-of-sample, say so plainly. I can refine it by \
+chat from there.";
+
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|ws, _: &ResearchIdeas, window, cx| {
@@ -137,6 +160,12 @@ pub fn init(cx: &mut App) {
         });
         workspace.register_action(|ws, _: &BacktestManifest, window, cx| {
             run_prompt(ws, "Backtest manifest", BACKTEST_MANIFEST, window, cx);
+        });
+        workspace.register_action(|ws, _: &ProposeAndProve, window, cx| {
+            run_prompt(ws, "Propose and prove", PROPOSE_AND_PROVE, window, cx);
+        });
+        workspace.register_action(|ws, _: &StartInterview, window, cx| {
+            run_prompt(ws, "Start interview", START_INTERVIEW, window, cx);
         });
     })
     .detach();
