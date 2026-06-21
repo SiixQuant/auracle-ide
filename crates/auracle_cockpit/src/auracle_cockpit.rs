@@ -40,6 +40,30 @@ enum ActionState {
     Error(SharedString),
 }
 
+/// What a Deploy click should do, given whether a live deploy is already armed
+/// (`awaiting_confirm`) and the FRESH `live_allowed` re-checked at click time.
+/// A live (real-money) deploy is never sent on a first click — it must be armed
+/// then confirmed; a click while live isn't permitted is a safe paper deploy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeployDecision {
+    ArmConfirm,
+    SubmitLive,
+    SubmitPaper,
+}
+
+fn decide_deploy(awaiting_confirm: bool, live_allowed: bool) -> DeployDecision {
+    match (awaiting_confirm, live_allowed) {
+        // Confirming click + still permitted → send the live deploy.
+        (true, true) => DeployDecision::SubmitLive,
+        // Live was revoked between arming and confirming → fall back to paper.
+        (true, false) => DeployDecision::SubmitPaper,
+        // First click, live permitted → arm a confirmation, never auto-send live.
+        (false, true) => DeployDecision::ArmConfirm,
+        // Live not permitted → a paper deploy is safe to send immediately.
+        (false, false) => DeployDecision::SubmitPaper,
+    }
+}
+
 /// The per-strategy data-feed status. `Stale` is intentionally never produced:
 /// the engine exposes per-strategy data *presence* (via the deploy preflight's
 /// `data` block) but not per-symbol freshness, so the cockpit reports Ok /
@@ -61,6 +85,10 @@ pub struct StrategyCockpit {
     /// "live ok" vs "paper only"). Deploy is relabeled "Deploy (paper)" and
     /// only ever submits a paper deploy when this is false.
     deploy_live_allowed: bool,
+    /// Two-step guard for live (real-money) deploys: armed on the first click
+    /// when live is permitted, sent only on the confirming second click.
+    /// Cleared when the active strategy/context changes.
+    awaiting_live_confirm: bool,
     feed: FeedState,
     /// Holds the in-flight resolve/feed/capability poll so it is cancelled when
     /// the active item changes or the cockpit is dropped.
@@ -78,6 +106,7 @@ impl StrategyCockpit {
             validate: ActionState::Idle,
             deploy: ActionState::Idle,
             deploy_live_allowed: false,
+            awaiting_live_confirm: false,
             feed: FeedState::Unknown,
             _context_task: None,
             _action_task: None,
@@ -115,6 +144,9 @@ impl StrategyCockpit {
             strategy_path: None,
         };
         self.feed = FeedState::Unknown;
+        // A pending live-deploy confirmation must not carry across a context
+        // change (different strategy/file).
+        self.awaiting_live_confirm = false;
         cx.notify();
 
         let http = cx.http_client();
@@ -191,18 +223,36 @@ impl StrategyCockpit {
             return;
         };
         let http = cx.http_client();
-        // Never offer a live deploy the backend can't honor: when the engine
-        // reports `live_allowed == false`, submit a paper deploy only.
-        let paper = !self.deploy_live_allowed;
+        // Re-check live permission FRESH at click time — the context-resolve
+        // snapshot is up to ~30s stale and this can authorize real money. The
+        // first click on a live-capable strategy only ARMS a confirmation;
+        // the deploy is sent on the confirming second click (or immediately as
+        // paper when live isn't permitted).
+        let awaiting = self.awaiting_live_confirm;
         self.deploy = ActionState::Running;
         cx.notify();
         self._action_task = Some(cx.spawn(async move |this, cx| {
+            let live_allowed = poll_live_allowed(http.clone()).await;
+            let decision = decide_deploy(awaiting, live_allowed);
+            if decision == DeployDecision::ArmConfirm {
+                this.update(cx, |this, cx| {
+                    this.deploy_live_allowed = true;
+                    this.deploy = ActionState::Idle;
+                    this.awaiting_live_confirm = true;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            }
+            let paper = decision == DeployDecision::SubmitPaper;
             let body = serde_json::json!({
                 "strategy_path": strategy_path,
                 "paper": paper,
             });
             let result = post_json(http, "/ui/api/deploy/new", body).await;
             this.update(cx, |this, cx| {
+                this.deploy_live_allowed = live_allowed;
+                this.awaiting_live_confirm = false;
                 this.deploy = match result {
                     Ok(value) => ActionState::Ok(deploy_summary(&value, paper)),
                     Err(error) => ActionState::Error(format!("Deploy failed: {error}.").into()),
@@ -264,7 +314,9 @@ impl Render for StrategyCockpit {
         let backtest = self.backtest.clone();
         let validate = self.validate.clone();
         let deploy = self.deploy.clone();
-        let deploy_label = if self.deploy_live_allowed {
+        let deploy_label = if self.awaiting_live_confirm {
+            "Confirm live deploy"
+        } else if self.deploy_live_allowed {
             "Deploy"
         } else {
             "Deploy (paper)"
@@ -320,9 +372,14 @@ impl Render for StrategyCockpit {
                             .when(!resolved, |this| {
                                 this.tooltip(Tooltip::text(unresolved_tooltip))
                             })
-                            .when(resolved && !self.deploy_live_allowed, |this| {
+                            .when(resolved && !self.deploy_live_allowed && !self.awaiting_live_confirm, |this| {
                                 this.tooltip(Tooltip::text(
                                     "Live trading is not allowed for the active broker; this deploys to paper.",
+                                ))
+                            })
+                            .when(self.awaiting_live_confirm, |this| {
+                                this.tooltip(Tooltip::text(
+                                    "Sends a LIVE, real-money deploy — click again to confirm.",
                                 ))
                             }),
                     )
@@ -581,5 +638,17 @@ mod tests {
             "strategies.example_ma.MACrossover"
         );
         assert_eq!(url_encode("a b&c"), "a%20b%26c");
+    }
+
+    #[test]
+    fn deploy_gate_never_auto_sends_live() {
+        // First click while live is permitted only ARMS a confirmation.
+        assert_eq!(decide_deploy(false, true), DeployDecision::ArmConfirm);
+        // Confirming click while still permitted sends the live deploy.
+        assert_eq!(decide_deploy(true, true), DeployDecision::SubmitLive);
+        // Live not permitted → a paper deploy is safe to send immediately.
+        assert_eq!(decide_deploy(false, false), DeployDecision::SubmitPaper);
+        // Live revoked between arming and confirming → fall back to paper.
+        assert_eq!(decide_deploy(true, false), DeployDecision::SubmitPaper);
     }
 }
