@@ -180,26 +180,38 @@ impl StrategyCockpit {
         self._action_task = Some(cx.spawn_in(window, async move |this, cx| {
             let body = serde_json::json!({ "strategy_path": strategy_path });
             let result = post_json(http, "/backtest", body).await;
-            this.update_in(cx, |this, window, cx| {
-                match result {
+            // Update ONLY the cockpit's own state here. Opening the results
+            // tab must NOT happen inside this update: open_backtest_results
+            // adds a workspace item, which synchronously re-enters a
+            // StrategyCockpit update and panics ("cannot update ... while it
+            // is already being updated"). So capture the summary, let this
+            // cockpit update finish, then open the results in a separate
+            // workspace update below.
+            let summary = this
+                .update(cx, |this, cx| match &result {
                     Ok(value) => {
-                        this.backtest = ActionState::Ok(backtest_summary(&value));
-                        // Open the results in a Studio tab beside the code.
-                        let summary = BacktestSummary::from_engine(title, &value);
-                        workspace
-                            .update(cx, |workspace, cx| {
-                                open_backtest_results(workspace, summary, window, cx);
-                            })
-                            .ok();
+                        this.backtest = ActionState::Ok(backtest_summary(value));
+                        let summary = BacktestSummary::from_engine(title, value);
+                        cx.notify();
+                        Some(summary)
                     }
                     Err(error) => {
                         this.backtest =
                             ActionState::Error(format!("Backtest failed: {error}.").into());
+                        cx.notify();
+                        None
                     }
-                }
-                cx.notify();
-            })
-            .ok();
+                })
+                .ok()
+                .flatten();
+
+            if let Some(summary) = summary {
+                workspace
+                    .update_in(cx, |workspace, window, cx| {
+                        open_backtest_results(workspace, summary, window, cx);
+                    })
+                    .ok();
+            }
         }));
     }
 
