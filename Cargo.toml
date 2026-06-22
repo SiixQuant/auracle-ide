@@ -24,6 +24,7 @@ members = [
     "crates/auracle_onboarding",
     "crates/auracle_spec_compiler",
     "crates/auracle_status",
+    "crates/auracle_view_state",
     "crates/auto_update",
     "crates/auto_update_helper",
     "crates/auto_update_ui",
@@ -453,6 +454,7 @@ auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_spec_compiler = { path = "crates/auracle_spec_compiler" }
 auracle_status = { path = "crates/auracle_status" }
+auracle_view_state = { path = "crates/auracle_view_state" }
 blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }
 runs_dock = { path = "crates/runs_dock" }

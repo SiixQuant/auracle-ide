@@ -1507,6 +1507,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_view_state"
+version = "0.1.0"
+
+[[package]]
 name = "auto_update"
 version = "0.1.0"
 dependencies = [
