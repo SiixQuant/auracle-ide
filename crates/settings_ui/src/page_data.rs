@@ -13,8 +13,8 @@ use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
     SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
     pages::{
-        open_audio_test_window, render_edit_prediction_setup_page, render_skills_setup_page,
-        render_tool_permissions_setup_page,
+        open_audio_test_window, render_account_page, render_edit_prediction_setup_page,
+        render_skills_setup_page, render_tool_permissions_setup_page,
     },
 };
 
@@ -86,6 +86,18 @@ fn connections_page() -> SettingsPage {
     SettingsPage {
         title: "Connections",
         items: vec![
+            SettingsPageItem::SectionHeader("Account"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Account".into(),
+                r#type: Default::default(),
+                json_path: None,
+                description: Some(
+                    "See who's signed in, your plan, and your license status.".into(),
+                ),
+                in_json: false,
+                files: USER,
+                render: render_account_page,
+            }),
             SettingsPageItem::SectionHeader("Broker connections"),
             SettingsPageItem::ActionLink(ActionLink {
                 title: "Connect a broker".into(),

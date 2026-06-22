@@ -890,6 +890,13 @@ pub struct SettingsWindow {
     /// used to show a transient "copied" checkmark on its share button.
     pub(crate) last_copied_skill_directory_path: Option<PathBuf>,
     skill_creator_page: Option<(Entity<pages::SkillCreatorPage>, Subscription)>,
+    /// The signed-in operator's profile (identity + plan + license), read once
+    /// over loopback from `/ui/api/me` when the window opens and re-read on the
+    /// Account page's Retry. Backs [`pages::render_account_page`]; held as a
+    /// [`Load`] so the page maps it to its loading/error/ready states.
+    pub(crate) account_profile: auracle_view_state::Load<auracle_connections::Profile>,
+    /// Keeps the in-flight profile fetch alive; replaced on each (re)load.
+    account_profile_task: Option<Task<()>>,
 }
 
 struct SearchDocument {
@@ -1866,17 +1873,42 @@ impl SettingsWindow {
             last_copied_link_path: None,
             last_copied_skill_directory_path: None,
             skill_creator_page: None,
+            account_profile: auracle_view_state::Load::Pending,
+            account_profile_task: None,
         };
 
         this.fetch_files(window, cx);
         this.build_ui(window, cx);
         this.build_search_index();
+        this.load_account_profile(cx);
 
         this.search_bar.update(cx, |editor, cx| {
             editor.focus_handle(cx).focus(window, cx);
         });
 
         this
+    }
+
+    /// (Re)fetch the signed-in operator's profile from the engine over loopback
+    /// and drive the Account page's [`auracle_view_state::Load`] state. Sets
+    /// `Pending` immediately so the page shows its skeleton, then resolves to
+    /// `Done`/`Failed`. Called once on open and again from the Account page's
+    /// Retry button.
+    pub(crate) fn load_account_profile(&mut self, cx: &mut Context<Self>) {
+        self.account_profile = auracle_view_state::Load::Pending;
+        cx.notify();
+        let http_client = cx.http_client();
+        self.account_profile_task = Some(cx.spawn(async move |this, cx| {
+            let result = auracle_connections::get_profile(http_client).await;
+            this.update(cx, |this, cx| {
+                this.account_profile = match result {
+                    Ok(profile) => auracle_view_state::Load::Done(profile),
+                    Err(error) => auracle_view_state::Load::Failed(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     fn handle_project_event(
@@ -5022,6 +5054,8 @@ pub mod test {
                 last_copied_link_path: None,
                 last_copied_skill_directory_path: None,
                 skill_creator_page: None,
+                account_profile: auracle_view_state::Load::Pending,
+                account_profile_task: None,
             }
         }
     }
