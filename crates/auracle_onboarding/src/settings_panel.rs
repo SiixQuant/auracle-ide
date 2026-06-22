@@ -126,6 +126,9 @@ pub struct AuracleSettingsPanel {
 
     // Read-only shared truths from the engine.
     shared: Option<SharedSettings>,
+    /// The signed-in operator's profile (identity + tier/license) from
+    /// `GET /ui/api/me`. Backs the Profile section at the top of Settings.
+    profile: Option<auracle_connections::Profile>,
 
     /// Single-flight slot for the broker sub-flow (list/select/test/save). A new
     /// broker action cancels the prior one — matching the wizard's `_task`.
@@ -138,6 +141,8 @@ pub struct AuracleSettingsPanel {
     /// Best-effort side task for the model MIRROR PUT, kept off the other slots
     /// so a follow-up broker/github action doesn't cancel an in-flight mirror.
     _mirror_task: Option<Task<()>>,
+    /// Single-flight slot for the profile read (`GET /ui/api/me`).
+    _profile_task: Option<Task<()>>,
 }
 
 impl AuracleSettingsPanel {
@@ -182,13 +187,16 @@ impl AuracleSettingsPanel {
                     git_identity_saved: false,
                     github_state: GitHubAuthState::Unknown,
                     shared: None,
+                    profile: None,
                     _broker_task: None,
                     _shared_task: None,
                     _github_task: None,
                     _mirror_task: None,
+                    _profile_task: None,
                 };
                 this.load_brokers(cx);
                 this.load_shared_and_import(cx);
+                this.load_profile(cx);
                 this.check_github(cx);
                 this
             })
@@ -198,6 +206,20 @@ impl AuracleSettingsPanel {
     fn fs(&self, cx: &App) -> Option<Arc<dyn fs::Fs>> {
         let workspace = self.workspace.upgrade()?;
         Some(workspace.read(cx).project().read(cx).fs().clone())
+    }
+
+    /// Read `GET /ui/api/me` for the operator's profile (identity + tier/
+    /// license), shown in the Profile section. Single-flight via `_profile_task`.
+    fn load_profile(&mut self, cx: &mut Context<Self>) {
+        let http = cx.http_client();
+        self._profile_task = Some(cx.spawn(async move |this, cx| {
+            let profile = auracle_connections::get_profile(http).await.ok();
+            this.update(cx, |this, cx| {
+                this.profile = profile;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     // ── Shared truths + AI-key import (cross-store sync) ───────────────
@@ -1135,6 +1157,58 @@ fn ai_truth_row(ai_model: &AiModelState) -> Option<(String, Color)> {
 }
 
 impl AuracleSettingsPanel {
+    /// The signed-in operator's identity + tier/license — the "user profile
+    /// settings" surface, read live from the engine via `/ui/api/me`. Honest
+    /// about license state; no cloud account.
+    fn render_profile(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = v_flex()
+            .gap_2()
+            .child(Label::new("Profile").size(LabelSize::Large));
+        match &self.profile {
+            None => {
+                body = body.child(
+                    Label::new("Reading your account from the engine…")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                );
+            }
+            Some(p) => {
+                if let Some(email) = p.email.as_deref().filter(|e| !e.is_empty()) {
+                    body = body
+                        .child(Label::new(format!("Signed in as {email}")).size(LabelSize::Small));
+                }
+                let plan = if !p.tier_display.is_empty() {
+                    p.tier_display.as_str()
+                } else {
+                    p.tier.as_str()
+                };
+                if !plan.is_empty() {
+                    body = body.child(
+                        Label::new(format!("Plan: {plan}"))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    );
+                }
+                let (text, color) = match p.license.status.as_str() {
+                    "perpetual" => ("License: perpetual".to_string(), Color::Success),
+                    "active" => (
+                        format!(
+                            "License: active ({} days left)",
+                            p.license.days_remaining.unwrap_or(0)
+                        ),
+                        Color::Success,
+                    ),
+                    "expired" => ("License: expired".to_string(), Color::Warning),
+                    "community" => ("License: Community (free)".to_string(), Color::Muted),
+                    "" => ("License: unknown".to_string(), Color::Muted),
+                    other => (format!("License: {other}"), Color::Muted),
+                };
+                body = body.child(Label::new(text).size(LabelSize::Small).color(color));
+            }
+        }
+        body
+    }
+
     /// Editor preferences, surfaced in the same panel so this is the one merged
     /// settings home — Auracle connections/AI/engine AND editor prefs together,
     /// rather than two separate "settings" places.
@@ -1201,6 +1275,7 @@ impl Render for AuracleSettingsPanel {
             .gap_4()
             .overflow_y_scroll()
             .bg(cx.theme().colors().panel_background)
+            .child(self.render_profile(cx))
             .child(self.render_broker(cx))
             .child(self.render_model(cx))
             .child(self.render_github(cx))
