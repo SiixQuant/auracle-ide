@@ -5,7 +5,8 @@
 //! anything works: a broker, a default AI model, and (optionally) GitHub.
 //! Rather than block them behind a modal, cold-start detection raises a
 //! dismissible toast ("Finish setup: connect a broker · pick an AI model ·
-//! sign in to GitHub") that opens the persistent [`settings_panel`] surface.
+//! sign in to GitHub") that opens the native Settings window at its
+//! Connections → Account page.
 //! The wizard modal is still reachable from the command palette / app menu
 //! via [`OpenOnboarding`] for operators who prefer the guided flow, but it
 //! never auto-opens.
@@ -22,10 +23,6 @@
 //!     reads "configured" from `is_authenticated`, never a local guess;
 //!   * the GitHub step shells `gh auth status` and `git config` for real;
 //!     it never claims a sign-in it can't observe.
-
-pub mod settings_panel;
-
-pub use settings_panel::{AuracleSettingsPanel, OpenConnections};
 
 use std::sync::Arc;
 
@@ -77,7 +74,6 @@ impl Global for FirstRunChecked {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(FirstRunChecked::default());
-    settings_panel::init(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         workspace.register_action(|workspace, _: &OpenOnboarding, window, cx| {
             let weak_workspace = workspace.weak_handle();
@@ -136,8 +132,8 @@ pub fn init(cx: &mut App) {
 /// Raise the dismissible first-run banner. Mirrors the toast pattern in
 /// `agent_panel.rs` (`workspace.show_toast(Toast::new(NotificationId::unique::
 /// <Marker>(), msg).on_click(...))`). The `on_click` closure deep-links to the
-/// native settings panel via the [`OpenConnections`] action — the same path
-/// the command palette uses.
+/// native Settings window's Connections → Account page via `OpenSettingsAt` —
+/// the same surface the command palette and app menu open.
 fn show_first_run_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
     workspace.show_toast(
         Toast::new(
@@ -145,7 +141,14 @@ fn show_first_run_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>)
             "Finish setup: connect a broker · pick an AI model · sign in to GitHub.",
         )
         .on_click("Open setup", |window, cx| {
-            window.dispatch_action(OpenConnections.boxed_clone(), cx);
+            window.dispatch_action(
+                zed_actions::OpenSettingsAt {
+                    path: "connections.account".into(),
+                    target: None,
+                }
+                .boxed_clone(),
+                cx,
+            );
         }),
         cx,
     );

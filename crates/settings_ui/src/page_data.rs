@@ -91,7 +91,9 @@ fn connections_page() -> SettingsPage {
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: "Account".into(),
                 r#type: Default::default(),
-                json_path: None,
+                // Deep-link target for `OpenSettingsAt`, so the title-bar menu
+                // and first-run banner can land directly on this page.
+                json_path: Some("connections.account"),
                 description: Some(
                     "See who's signed in, your plan, and your license status.".into(),
                 ),

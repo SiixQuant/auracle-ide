@@ -32,7 +32,7 @@ use futures::{StreamExt, channel::oneshot, future};
 use git::GitHostingProviderRegistry;
 use git_ui::clone::clone_and_open;
 use gpui::{
-    App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, Task, TaskExt,
+    Action as _, App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, Task, TaskExt,
     UpdateGlobal as _, block_on,
 };
 use gpui_platform;
@@ -1075,11 +1075,13 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                         multi_workspace.workspace().update(cx, |workspace, cx| {
                             match name.as_str() {
                                 "blotter" => {
-                                    workspace.focus_panel::<blotter_panel::BlotterPanel>(window, cx);
+                                    workspace
+                                        .focus_panel::<blotter_panel::BlotterPanel>(window, cx);
                                 }
                                 "strategies" => {
-                                    workspace
-                                        .focus_panel::<strategies_panel::StrategiesPanel>(window, cx);
+                                    workspace.focus_panel::<strategies_panel::StrategiesPanel>(
+                                        window, cx,
+                                    );
                                 }
                                 "schedules" => {
                                     workspace
@@ -1100,10 +1102,18 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                         .focus_panel::<validation_rail::ValidationRail>(window, cx);
                                 }
                                 "connections" => {
-                                    workspace
-                                        .focus_panel::<auracle_onboarding::AuracleSettingsPanel>(
-                                            window, cx,
-                                        );
+                                    // The bespoke connections dock panel was
+                                    // retired; the native Settings window now
+                                    // owns this surface, so deep-link to its
+                                    // Connections → Account page instead.
+                                    window.dispatch_action(
+                                        zed_actions::OpenSettingsAt {
+                                            path: "connections.account".into(),
+                                            target: None,
+                                        }
+                                        .boxed_clone(),
+                                        cx,
+                                    );
                                 }
                                 other => {
                                     log::warn!(

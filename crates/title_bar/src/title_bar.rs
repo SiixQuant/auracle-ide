@@ -7,7 +7,6 @@ mod update_version;
 use crate::application_menu::{ApplicationMenu, show_menus};
 use agent_settings::{AgentSettings, WindowLayout};
 use arrayvec::ArrayVec;
-use auracle_onboarding::OpenConnections;
 use git_ui::worktree_picker::WorktreePicker;
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
@@ -51,8 +50,7 @@ use ui::{
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
-    MultiWorkspace, ToggleWorktreeSecurity, Workspace,
-    notifications::NotifyResultExt,
+    MultiWorkspace, ToggleWorktreeSecurity, Workspace, notifications::NotifyResultExt,
 };
 
 use zed_actions::OpenRemote;
@@ -1239,7 +1237,14 @@ impl TitleBar {
                         .separator()
                     })
                     .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action("Connections & AI Model", OpenConnections.boxed_clone())
+                    .action(
+                        "Account & Connections",
+                        zed_actions::OpenSettingsAt {
+                            path: "connections.account".into(),
+                            target: None,
+                        }
+                        .boxed_clone(),
+                    )
                     .action("Keymap", Box::new(zed_actions::OpenKeymap))
                     .action(
                         "Themes…",
