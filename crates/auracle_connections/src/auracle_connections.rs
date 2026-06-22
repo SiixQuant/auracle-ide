@@ -130,6 +130,36 @@ pub struct SharedSettings {
     pub tier: String,
 }
 
+/// The signed-in operator's identity + tier/license, read over loopback from
+/// `GET /ui/api/me`. Backs the Settings "Profile" section. Only the fields the
+/// IDE renders are modeled; the rest of the payload is ignored.
+#[derive(Clone, Deserialize, Default)]
+pub struct Profile {
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub tier: String,
+    #[serde(default)]
+    pub tier_display: String,
+    #[serde(default)]
+    pub license: LicenseInfo,
+}
+
+/// License status for the Profile section — `status` is one of the engine's
+/// honest states: community | active | expired | perpetual. `expires_at` /
+/// `days_remaining` are null for community + perpetual (no billing cycle).
+#[derive(Clone, Deserialize, Default)]
+pub struct LicenseInfo {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub days_remaining: Option<i64>,
+}
+
 #[derive(Clone, Deserialize, Default)]
 pub struct DataKeyState {
     #[serde(default)]
@@ -522,6 +552,14 @@ pub async fn save_connection(
 /// the engine; on this loopback transport the operator's own key authenticates.
 pub async fn get_settings(http: Arc<dyn http_client::HttpClient>) -> Result<SharedSettings> {
     let value = get_json(http, "/ui/api/settings").await?;
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Read the signed-in operator's profile (identity + tier/license) from
+/// `GET /ui/api/me`. Backs the Settings "Profile" section. Mirrors
+/// `get_settings`'s loopback read.
+pub async fn get_profile(http: Arc<dyn http_client::HttpClient>) -> Result<Profile> {
+    let value = get_json(http, "/ui/api/me").await?;
     Ok(serde_json::from_value(value)?)
 }
 
