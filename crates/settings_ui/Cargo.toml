@@ -20,6 +20,7 @@ agent.workspace = true
 auracle_account.workspace = true
 auracle_ai_settings.workspace = true
 auracle_connections.workspace = true
+auracle_data_sources.workspace = true
 auracle_view_state.workspace = true
 agent_settings.workspace = true
 agent_skills.workspace = true

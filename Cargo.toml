@@ -22,6 +22,7 @@ members = [
     "crates/auracle_cockpit",
     "crates/auracle_connect",
     "crates/auracle_connections",
+    "crates/auracle_data_sources",
     "crates/auracle_deploy_gate",
     "crates/auracle_onboarding",
     "crates/auracle_spec_compiler",
@@ -454,6 +455,7 @@ auracle_backtest_results = { path = "crates/auracle_backtest_results" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_connections = { path = "crates/auracle_connections" }
+auracle_data_sources = { path = "crates/auracle_data_sources" }
 auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_spec_compiler = { path = "crates/auracle_spec_compiler" }

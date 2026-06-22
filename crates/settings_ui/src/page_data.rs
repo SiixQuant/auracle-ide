@@ -14,7 +14,7 @@ use crate::{
     SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
     pages::{
         open_audio_test_window, render_account_page, render_ai_providers_page,
-        render_edit_prediction_setup_page, render_skills_setup_page,
+        render_data_sources_page, render_edit_prediction_setup_page, render_skills_setup_page,
         render_tool_permissions_setup_page,
     },
 };
@@ -124,6 +124,20 @@ fn connections_page() -> SettingsPage {
                     window.remove_window();
                 }),
                 files: USER,
+            }),
+            SettingsPageItem::SectionHeader("Data sources"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Data sources".into(),
+                r#type: Default::default(),
+                json_path: None,
+                description: Some(
+                    "See which market-data vendors the engine holds keys for. \
+                     Manage the keys in the launcher."
+                        .into(),
+                ),
+                in_json: false,
+                files: USER,
+                render: render_data_sources_page,
             }),
         ]
         .into_boxed_slice(),

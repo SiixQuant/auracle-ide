@@ -1464,6 +1464,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_data_sources"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_deploy_gate"
 version = "0.1.0"
 dependencies = [
@@ -16806,6 +16810,7 @@ dependencies = [
  "auracle_account",
  "auracle_ai_settings",
  "auracle_connections",
+ "auracle_data_sources",
  "auracle_view_state",
  "cloud_api_types",
  "codestral",
