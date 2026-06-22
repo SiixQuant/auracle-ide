@@ -1,23 +1,34 @@
 //! Validation rail — does this idea hold up, in plain words.
 //!
 //! Two views. First you pick a strategy from the engine's list; then
-//! the rail shows the seven overfit checks as traffic lights — green
+//! the rail shows the overfit checks as traffic lights — green
 //! "looks healthy", red "needs attention", or an honest "couldn't be
 //! checked this run". Expanding a row reveals the engine's plain
 //! "what this means" and "what usually fixes it". The rail renders the
 //! engine's verdict; it never invents a tier or a number.
+//!
+//! Both lists route their fetch outcome through the shared
+//! [`auracle_view_state`] seam: the strategy picker and the verdict each
+//! become a thin `match` over [`ViewState`], so neither can silently skip a
+//! designed loading skeleton, empty hint, or retryable error. The severity
+//! and verdict decisions live in the gpui-free [`auracle_validation`] reducer;
+//! this module maps a [`Severity`] to a theme [`Color`] and nothing more.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_strategies::{StrategyListItem, strategy_rows};
+use auracle_validation::{Severity, SignalRow, Verdict, signal_row, verdict, verdict_is_empty};
+use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
-    App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
-    SharedString, Task, WeakEntity, Window, actions, px,
+    App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
+    Task, WeakEntity, Window, actions, px,
 };
-use std::collections::HashSet;
 use ui::prelude::*;
+use ui::{Divider, Indicator, ListItem, ListItemSpacing};
 use workspace::Workspace;
 use workspace::dock::{DockPosition, Panel, PanelEvent};
 
@@ -40,42 +51,18 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-#[derive(Clone)]
-struct Strategy {
-    path: SharedString,
-    doc: SharedString,
-}
-
-#[derive(Clone)]
-struct Signal {
-    name: SharedString,
-    tier: SharedString,
-    plain: SharedString,
-    fix: SharedString,
-}
-
-#[derive(Clone)]
-struct Verdict {
-    summary: SharedString,
-    signals: Vec<Signal>,
-}
-
-#[derive(Clone, PartialEq)]
-enum Conn {
-    NotConnected,
-    Loading,
-    Ready,
-    Unreachable,
-}
-
 pub struct ValidationRail {
     focus_handle: FocusHandle,
-    conn: Conn,
-    strategies: Vec<Strategy>,
+    /// `true` until a connection (an engine API key) exists. This is a pre-fetch
+    /// state, not an engine failure, so it is kept outside the `Load` seam: a
+    /// disconnected rail must offer Connect, never a false "retry the engine".
+    connected: bool,
+    /// The strategy picker list, behind the shared fetch seam.
+    strategies: Load<Vec<StrategyListItem>>,
     selected: Option<SharedString>,
-    verdict: Option<Verdict>,
-    measuring: bool,
-    measure_error: Option<SharedString>,
+    /// The verdict for the selected strategy, behind the shared fetch seam.
+    verdict: Load<Verdict>,
+    /// Signal rows whose plain/fix detail is expanded.
     expanded: HashSet<SharedString>,
     _poll: Task<()>,
 }
@@ -87,30 +74,22 @@ impl ValidationRail {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.conn = Conn::Loading;
-                        this.strategies.clear();
-                        this.selected = None;
-                        this.verdict = None;
-                        this.measure_error = None;
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.connected = auracle_connect::load_config().api_key.is_some();
+                    this.strategies = Load::Pending;
+                    this.selected = None;
+                    this.verdict = Load::Pending;
+                    this.expanded.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_list_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
-                    conn: if auracle_connect::load_config().api_key.is_some() {
-                        Conn::Loading
-                    } else {
-                        Conn::NotConnected
-                    },
-                    strategies: Vec::new(),
+                    connected: auracle_connect::load_config().api_key.is_some(),
+                    strategies: Load::Pending,
                     selected: None,
-                    verdict: None,
-                    measuring: false,
-                    measure_error: None,
+                    verdict: Load::Pending,
                     expanded: HashSet::new(),
                     _poll: poll,
                 }
@@ -127,17 +106,21 @@ impl ValidationRail {
                     .update(cx, |this, cx| {
                         match fetched {
                             ListResult::NotConnected => {
-                                this.conn = Conn::NotConnected;
-                                this.strategies.clear();
+                                this.connected = false;
+                                this.strategies = Load::Pending;
                             }
+                            // A poll failure replaces the picker with a designed,
+                            // retryable error rather than silently holding stale
+                            // rows — staleness must be honest (rubric item 3).
                             ListResult::Unreachable => {
-                                if this.strategies.is_empty() {
-                                    this.conn = Conn::Unreachable;
-                                }
+                                this.connected = true;
+                                this.strategies = Load::Failed(
+                                    "Your engine didn't answer. It may be stopped.".into(),
+                                );
                             }
                             ListResult::Ok(items) => {
-                                this.conn = Conn::Ready;
-                                this.strategies = items;
+                                this.connected = true;
+                                this.strategies = Load::Done(items);
                             }
                         }
                         cx.notify();
@@ -153,9 +136,7 @@ impl ValidationRail {
 
     fn select(&mut self, path: SharedString, cx: &mut Context<Self>) {
         self.selected = Some(path.clone());
-        self.verdict = None;
-        self.measure_error = None;
-        self.measuring = true;
+        self.verdict = Load::Pending;
         self.expanded.clear();
         cx.notify();
         let http = cx.http_client();
@@ -165,52 +146,49 @@ impl ValidationRail {
                 if this.selected.as_ref() != Some(&path) {
                     return; // selection changed mid-flight
                 }
-                this.measuring = false;
-                match result {
-                    Ok(v) => {
-                        this.verdict = Some(v);
-                        this.measure_error = None;
-                    }
-                    Err(msg) => {
-                        this.verdict = None;
-                        this.measure_error = Some(msg);
-                    }
-                }
+                this.verdict = match result {
+                    Ok(v) => Load::Done(v),
+                    Err(message) => Load::Failed(message.to_string()),
+                };
                 cx.notify();
             })
             .ok();
         })
         .detach();
     }
+}
 
-    fn tier_color(&self, tier: &str, cx: &App) -> Hsla {
-        let s = cx.theme().status();
-        match tier {
-            "green" => s.success,
-            "red" => s.error,
-            "amber" | "warning" => s.warning,
-            _ => s.ignored, // unknown — couldn't be checked
-        }
+/// Map a reducer [`Severity`] to the theme colour the rail renders it in. Only
+/// theme `Color::*` — never a colour literal — mirroring
+/// `account_setup::tone_color` so the rail tracks the theme.
+fn severity_color(severity: Severity) -> Color {
+    match severity {
+        Severity::Ok => Color::Success,
+        Severity::Caution => Color::Warning,
+        Severity::NeedsAttention => Color::Error,
+        // Unknown / blank tier — couldn't be checked, said honestly.
+        Severity::NotChecked => Color::Muted,
     }
+}
 
-    /// A one-word tier marker so each row reads without relying on the
-    /// dot's color — and so an unknown row says "not checked" instead
-    /// of looking broken (the same glance-legibility law as the
-    /// runway rail).
-    fn tier_word(&self, tier: &str) -> (&'static str, Color) {
-        match tier {
-            "green" => ("ok", Color::Success),
-            "red" => ("needs attention", Color::Error),
-            "amber" | "warning" => ("caution", Color::Warning),
-            _ => ("not checked", Color::Muted),
-        }
-    }
+/// A one-word severity marker so each row reads without relying on the dot's
+/// colour — and so an unchecked row says "not checked" instead of looking
+/// broken (the same glance-legibility law as the runway rail). Pairs the word
+/// with the theme colour from [`severity_color`].
+fn severity_word(severity: Severity) -> (&'static str, Color) {
+    let word = match severity {
+        Severity::Ok => "ok",
+        Severity::Caution => "caution",
+        Severity::NeedsAttention => "needs attention",
+        Severity::NotChecked => "not checked",
+    };
+    (word, severity_color(severity))
 }
 
 enum ListResult {
     NotConnected,
     Unreachable,
-    Ok(Vec<Strategy>),
+    Ok(Vec<StrategyListItem>),
 }
 
 fn engine() -> Option<(String, String)> {
@@ -219,7 +197,7 @@ fn engine() -> Option<(String, String)> {
     let url = config
         .engine_url
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    Some((url.to_string(), key.to_string()))
+    Some((url, key))
 }
 
 async fn get_json(
@@ -255,23 +233,35 @@ async fn fetch_strategies(http: Arc<dyn http_client::HttpClient>) -> ListResult 
     }
     match get_json(http, "/ui/api/backtest/strategies".into()).await {
         Ok(v) => {
-            let mut out = Vec::new();
-            if let Some(items) = v.get("strategies").and_then(|x| x.as_array()) {
-                for it in items {
-                    if let Some(path) = it.get("path").and_then(|p| p.as_str()) {
-                        out.push(Strategy {
-                            path: SharedString::from(path.to_string()),
-                            doc: SharedString::from(
+            // The picker reads the same engine route as the strategies navigator,
+            // so it builds rows with the same reducer (parse, derive name + first
+            // doc line, drop empty paths, sort). The rail only needs `path`/`doc`
+            // and ignores the extra fields.
+            let raw: Vec<(String, String, bool)> = v
+                .get("strategies")
+                .and_then(|x| x.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|it| {
+                            (
+                                it.get("path")
+                                    .and_then(|p| p.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
                                 it.get("doc")
                                     .and_then(|d| d.as_str())
                                     .unwrap_or_default()
                                     .to_string(),
-                            ),
-                        });
-                    }
-                }
-            }
-            ListResult::Ok(out)
+                                it.get("bundled").and_then(|b| b.as_bool()).unwrap_or(false),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            ListResult::Ok(strategy_rows(
+                raw.iter().map(|(p, d, b)| (p.as_str(), d.as_str(), *b)),
+            ))
         }
         Err(_) => ListResult::Unreachable,
     }
@@ -287,33 +277,34 @@ async fn fetch_validation(
     );
     match get_json(http, path).await {
         Ok(v) => {
-            let summary = v
-                .get("plain")
-                .and_then(|p| p.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let mut signals = Vec::new();
-            if let Some(items) = v.get("signals").and_then(|x| x.as_array()) {
-                for it in items {
-                    signals.push(Signal {
-                        name: field(it, "name"),
-                        tier: field(it, "tier"),
-                        plain: field(it, "plain"),
-                        fix: field(it, "what_usually_fixes_it"),
-                    });
-                }
-            }
-            Ok(Verdict {
-                summary: SharedString::from(summary),
-                signals,
-            })
+            let summary = v.get("plain").and_then(|p| p.as_str()).unwrap_or_default();
+            let signals = v
+                .get("signals")
+                .and_then(|x| x.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|it| {
+                            signal_row(
+                                str_field(it, "name"),
+                                str_field(it, "tier"),
+                                str_field(it, "plain"),
+                                str_field(it, "what_usually_fixes_it"),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The reducer normalises a blank summary to `None` and never
+            // fabricates text.
+            Ok(verdict(summary, signals))
         }
         Err(e) => Err(SharedString::from(format!("{e}"))),
     }
 }
 
-fn field(v: &serde_json::Value, key: &str) -> SharedString {
-    SharedString::from(v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string())
+fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+    v.get(key).and_then(|x| x.as_str()).unwrap_or_default()
 }
 
 fn urlencode(s: &str) -> String {
@@ -383,37 +374,14 @@ impl Render for ValidationRail {
                     .color(Color::Muted),
             );
 
-        let body: AnyElement = match self.conn {
-            Conn::NotConnected => v_flex()
-                .p_3()
-                .gap_2()
-                .child(Label::new("Not connected to your Auracle engine yet."))
-                .child(
-                    Button::new("validation-connect", "Connect…")
-                        .style(ButtonStyle::Filled)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
-                        }),
-                )
-                .into_any_element(),
-            Conn::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Checking…").color(Color::Muted))
-                .into_any_element(),
-            Conn::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Conn::Ready => {
-                if let Some(selected) = self.selected.clone() {
-                    self.render_verdict(selected, cx).into_any_element()
-                } else {
-                    self.render_picker(cx).into_any_element()
-                }
-            }
+        // Disconnected is a pre-fetch state, kept outside the `Load` seam: it
+        // isn't an engine failure, so it offers Connect rather than a Retry.
+        let body: AnyElement = if !self.connected {
+            render_not_connected()
+        } else if let Some(selected) = self.selected.clone() {
+            self.render_verdict(selected, cx)
+        } else {
+            self.render_picker(cx)
         };
 
         v_flex()
@@ -426,158 +394,331 @@ impl Render for ValidationRail {
     }
 }
 
-impl ValidationRail {
-    fn render_picker(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.strategies.is_empty() {
-            return v_flex()
-                .p_3()
-                .child(
-                    Label::new(
-                        "No strategies yet. Build one first, then come back to check it.",
-                    )
-                    .color(Color::Muted),
-                )
-                .into_any_element();
-        }
-        v_flex()
-            .id("validation-picker")
-            .size_full()
-            .overflow_y_scroll()
-            .p_1()
-            .gap_0p5()
+/// The disconnected pre-state: no engine key yet, so offer Connect (never a
+/// false retryable error).
+fn render_not_connected() -> AnyElement {
+    v_flex()
+        .p_3()
+        .gap_2()
+        .child(Label::new("Not connected to your Auracle engine yet."))
+        .child(
+            Button::new("validation-connect", "Connect…")
+                .style(ButtonStyle::Filled)
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(auracle_connect::Connect), cx);
+                }),
+        )
+        .into_any_element()
+}
+
+/// A designed skeleton — muted placeholder rows, not a bare "Checking…" label —
+/// while a fetch is in flight (mirrors `account_setup::render_loading`).
+fn render_loading() -> AnyElement {
+    let skeleton_row = || {
+        ListItem::new("validation-skeleton")
+            .spacing(ListItemSpacing::Sparse)
             .child(
-                Label::new("Pick a strategy to check:")
+                Label::new("Checking…")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
-            .children(self.strategies.iter().map(|s| {
-                let path = s.path.clone();
-                v_flex()
-                    .id(SharedString::from(format!("pick-{}", s.path)))
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .hover(|st| st.bg(cx.theme().colors().ghost_element_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select(path.clone(), cx);
-                    }))
-                    .child(Label::new(s.path.clone()).size(LabelSize::Small))
-                    .when(!s.doc.is_empty(), |row| {
-                        row.child(
-                            Label::new(s.doc.clone())
-                                .size(LabelSize::XSmall)
+    };
+    v_flex()
+        .p_1()
+        .child(skeleton_row())
+        .child(Divider::horizontal().flex_grow_1())
+        .child(skeleton_row())
+        .child(Divider::horizontal().flex_grow_1())
+        .child(skeleton_row())
+        .into_any_element()
+}
+
+/// A designed empty state carrying the hint about what would appear here.
+fn render_empty(hint: &str) -> AnyElement {
+    v_flex()
+        .p_3()
+        .child(Label::new(hint.to_string()).color(Color::Muted))
+        .into_any_element()
+}
+
+impl ValidationRail {
+    fn render_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        // The picker is a thin match over the shared seam: a designed loading
+        // skeleton, an honest empty hint, a retryable error, then the rows.
+        let state = self
+            .strategies
+            .clone()
+            .into_list_view("No strategies yet. Build one first, then come back to check it.");
+
+        match state {
+            ViewState::Loading => render_loading(),
+            ViewState::Empty { hint } => render_empty(&hint),
+            ViewState::Error { message, retryable } => {
+                self.render_picker_error(&message, retryable, cx)
+            }
+            ViewState::Ready(strategies) => v_flex()
+                .id("validation-picker")
+                .size_full()
+                .overflow_y_scroll()
+                .p_1()
+                .gap_0p5()
+                .child(
+                    Label::new("Pick a strategy to check:")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .children(strategies.into_iter().enumerate().map(|(index, item)| {
+                    let path = SharedString::from(item.path);
+                    let click_path = path.clone();
+                    let doc = item.doc;
+                    ListItem::new(("validation-pick", index))
+                        .spacing(ListItemSpacing::Sparse)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.select(click_path.clone(), cx);
+                        }))
+                        .child(
+                            v_flex()
+                                .gap_0p5()
+                                .child(Label::new(path).size(LabelSize::Small))
+                                .when(!doc.is_empty(), |row| {
+                                    row.child(
+                                        Label::new(SharedString::from(doc))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                }),
+                        )
+                }))
+                .into_any_element(),
+        }
+    }
+
+    /// An honest, retryable error for the picker fetch — re-runs the next poll
+    /// by re-fetching the list once (mirrors `account_setup::render_error`).
+    fn render_picker_error(
+        &self,
+        message: &str,
+        retryable: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .p_3()
+            .gap_2()
+            .child(
+                Label::new(message.to_string())
+                    .size(LabelSize::Small)
+                    .color(Color::Error),
+            )
+            .when(retryable, |this| {
+                this.child(
+                    Button::new("validation-picker-retry", "Retry")
+                        .style(ButtonStyle::Outlined)
+                        .start_icon(
+                            Icon::new(IconName::RotateCcw)
+                                .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                    })
-            }))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.strategies = Load::Pending;
+                            cx.notify();
+                            let http = cx.http_client();
+                            cx.spawn(async move |this: WeakEntity<Self>, cx| {
+                                let fetched = fetch_strategies(http).await;
+                                this.update(cx, |this, cx| {
+                                    this.strategies = match fetched {
+                                        ListResult::NotConnected => {
+                                            this.connected = false;
+                                            Load::Pending
+                                        }
+                                        ListResult::Unreachable => Load::Failed(
+                                            "Your engine didn't answer. It may be stopped.".into(),
+                                        ),
+                                        ListResult::Ok(items) => Load::Done(items),
+                                    };
+                                    cx.notify();
+                                })
+                                .ok();
+                            })
+                            .detach();
+                        })),
+                )
+            })
             .into_any_element()
     }
 
-    fn render_verdict(&self, selected: SharedString, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_verdict(&self, selected: SharedString, cx: &mut Context<Self>) -> AnyElement {
         let back = h_flex().px_2().py_1().gap_2().child(
             Button::new("validation-back", "← change strategy")
                 .style(ButtonStyle::Subtle)
                 .label_size(LabelSize::XSmall)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.selected = None;
-                    this.verdict = None;
-                    this.measure_error = None;
+                    this.verdict = Load::Pending;
+                    this.expanded.clear();
                     cx.notify();
                 })),
         );
 
-        let mut col = v_flex().size_full().child(back).child(
-            div().px_2().child(
-                Label::new(selected.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            ),
+        let head = div().px_2().child(
+            Label::new(selected.clone())
+                .size(LabelSize::Small)
+                .color(Color::Muted),
         );
 
-        if self.measuring {
-            return col.child(
-                div()
-                    .p_3()
-                    .child(Label::new("Checking this strategy…").color(Color::Muted)),
-            );
-        }
-        if let Some(err) = &self.measure_error {
-            return col.child(
-                v_flex()
-                    .p_3()
-                    .gap_1()
-                    .child(Label::new("Couldn't check this strategy.").color(Color::Warning))
-                    .child(Label::new(err.clone()).size(LabelSize::XSmall).color(Color::Muted)),
-            );
-        }
-        if let Some(verdict) = &self.verdict {
-            col = col.child(
-                div().px_2().py_1().child(
-                    Label::new(verdict.summary.clone()).size(LabelSize::Small),
-                ),
-            );
-            let rows = v_flex()
-                .id("validation-signals")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_0p5()
-                .children(verdict.signals.iter().map(|sig| {
-                    let dot = self.tier_color(&sig.tier, cx);
-                    let key = sig.name.clone();
-                    let is_open = self.expanded.contains(&key);
-                    v_flex()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .hover(|st| st.bg(cx.theme().colors().ghost_element_hover))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .id(SharedString::from(format!("sig-{}", sig.name)))
-                                .on_click(cx.listener({
-                                    let key = key.clone();
-                                    move |this, _, _, cx| {
-                                        if !this.expanded.remove(&key) {
-                                            this.expanded.insert(key.clone());
-                                        }
-                                        cx.notify();
-                                    }
-                                }))
-                                .child(div().size_2().rounded_full().flex_none().bg(dot))
-                                .child(Label::new(sig.name.clone()).size(LabelSize::Small))
-                                .child(div().flex_1())
-                                .child({
-                                    let (word, color) = self.tier_word(&sig.tier);
-                                    Label::new(word).size(LabelSize::XSmall).color(color)
-                                }),
+        // The verdict is a thin match over the shared seam. A verdict with no
+        // signals is "empty" regardless of summary (`verdict_is_empty`), so the
+        // empty hint covers the "no checks for this strategy" case.
+        let state = self.verdict.clone().into_view(
+            verdict_is_empty,
+            "The engine returned no checks for this strategy yet.",
+        );
+
+        let body = match state {
+            ViewState::Loading => render_loading(),
+            ViewState::Empty { hint } => render_empty(&hint),
+            ViewState::Error { message, retryable } => {
+                self.render_verdict_error(selected, &message, retryable, cx)
+            }
+            ViewState::Ready(verdict) => self.render_verdict_rows(&verdict, cx),
+        };
+
+        v_flex()
+            .size_full()
+            .child(back)
+            .child(head)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// An honest, retryable error for the verdict fetch — re-runs the same
+    /// measure by re-invoking `select(path)`.
+    fn render_verdict_error(
+        &self,
+        selected: SharedString,
+        message: &str,
+        retryable: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .p_3()
+            .gap_2()
+            .child(Label::new("Couldn't check this strategy.").color(Color::Error))
+            .child(
+                Label::new(message.to_string())
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .when(retryable, |this| {
+                let retry_path = selected.clone();
+                this.child(
+                    Button::new("validation-verdict-retry", "Retry")
+                        .style(ButtonStyle::Outlined)
+                        .start_icon(
+                            Icon::new(IconName::RotateCcw)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
                         )
-                        .when(is_open, |row| {
-                            row.child(
-                                v_flex()
-                                    .pl_4()
-                                    .gap_1()
-                                    .child(
-                                        Label::new(sig.plain.clone())
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
-                                    )
-                                    .when(!sig.fix.is_empty(), |c| {
-                                        c.child(
-                                            Label::new(format!(
-                                                "Usually fixed by: {}",
-                                                sig.fix
-                                            ))
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
-                                        )
-                                    }),
-                            )
-                        })
-                }));
-            return col.child(rows);
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.select(retry_path.clone(), cx);
+                        })),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_verdict_rows(&self, verdict: &Verdict, cx: &mut Context<Self>) -> AnyElement {
+        let mut col = v_flex().size_full();
+
+        // The reducer omits a blank summary, so a present summary is real text.
+        if let Some(summary) = &verdict.summary {
+            col = col.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .child(Label::new(summary.clone()).size(LabelSize::Small)),
+            );
         }
-        col.child(div().p_3().child(Label::new("…").color(Color::Muted)))
+
+        let rows = v_flex()
+            .id("validation-signals")
+            .size_full()
+            .overflow_y_scroll()
+            .p_1()
+            .gap_0p5()
+            .children(
+                verdict
+                    .signals
+                    .iter()
+                    .enumerate()
+                    .map(|(index, signal)| self.render_signal_row(index, signal, cx)),
+            );
+
+        col.child(rows).into_any_element()
+    }
+
+    /// One signal as a native `ListItem`: a status dot in the start slot, the
+    /// engine's check name, the one-word severity marker, and a disclosure
+    /// chevron. Clicking the row (or its chevron) expands the engine's plain /
+    /// fix text beneath it.
+    fn render_signal_row(
+        &self,
+        index: usize,
+        signal: &SignalRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = SharedString::from(signal.name.clone());
+        let is_open = self.expanded.contains(&key);
+        let dot_color = severity_color(signal.severity);
+        let (word, word_color) = severity_word(signal.severity);
+        let toggle_key = key.clone();
+
+        let row = ListItem::new(("validation-signal", index))
+            .spacing(ListItemSpacing::Sparse)
+            .inset(true)
+            .toggle(Some(is_open))
+            .on_toggle(cx.listener({
+                let key = toggle_key.clone();
+                move |this, _, _, cx| {
+                    if !this.expanded.remove(&key) {
+                        this.expanded.insert(key.clone());
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.expanded.remove(&toggle_key) {
+                    this.expanded.insert(toggle_key.clone());
+                }
+                cx.notify();
+            }))
+            .start_slot(Indicator::dot().color(dot_color))
+            .child(Label::new(key).size(LabelSize::Small))
+            .end_slot(Label::new(word).size(LabelSize::XSmall).color(word_color));
+
+        let detail = is_open.then(|| {
+            v_flex()
+                .pl_4()
+                .pb_1()
+                .gap_1()
+                .when(!signal.plain.is_empty(), |c| {
+                    c.child(
+                        Label::new(SharedString::from(signal.plain.clone()))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .when(!signal.fix.is_empty(), |c| {
+                    c.child(
+                        Label::new(format!("Usually fixed by: {}", signal.fix))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+        });
+
+        v_flex()
+            .child(row)
+            .when_some(detail, |this, detail| this.child(detail))
+            .into_any_element()
     }
 }

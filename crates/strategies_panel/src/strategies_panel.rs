@@ -5,18 +5,28 @@
 //! is clicked. It is a light navigator, not a control panel: deploy and
 //! run state live in the Schedules and Runs surfaces. With no engine
 //! reachable it says so plainly instead of pretending to have a list.
+//!
+//! The fetch outcome routes through the shared [`auracle_view_state`] seam, so
+//! the panel is a thin `match` over [`ViewState`] with a designed loading
+//! skeleton, an empty hint, and a retryable error — never a blank panel. The
+//! row parsing, naming, and sort live in the gpui-free [`auracle_strategies`]
+//! reducer (shared with the validation rail's picker), and `module_to_relpath`
+//! is the tested resolver behind opening a file.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_strategies::{StrategyListItem, module_to_relpath, strategy_rows};
+use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
     Task, WeakEntity, Window, actions, px,
 };
 use ui::prelude::*;
+use ui::{Divider, ListItem, ListItemSpacing};
 use workspace::dock::{DockPosition, Panel, PanelEvent};
 use workspace::{OpenOptions, OpenVisible, Workspace};
 
@@ -39,30 +49,18 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-#[derive(Clone)]
-struct StrategyRow {
-    /// The class or function name — the last segment of the module path.
-    name: SharedString,
-    /// The full dotted module path (e.g. `strategies.example_ma.MACrossover`).
-    path: SharedString,
-    /// First line of the docstring, if any.
-    doc: SharedString,
-    bundled: bool,
-}
-
-#[derive(Clone, PartialEq)]
-enum Status {
-    NotConnected,
-    Loading,
-    Connected,
-    Unreachable,
-}
-
 pub struct StrategiesPanel {
     focus_handle: FocusHandle,
     workspace: WeakEntity<Workspace>,
-    strategies: Vec<StrategyRow>,
-    status: Status,
+    /// `true` until a connection (an engine API key) exists. A pre-fetch state
+    /// kept outside the `Load` seam: disconnected offers Connect, never Retry.
+    connected: bool,
+    /// The strategy list, behind the shared fetch seam.
+    strategies: Load<Vec<StrategyListItem>>,
+    /// A short honest note shown when a row click can't resolve to a file (no
+    /// open worktree, or an unsplittable module path) — so the click is never a
+    /// silent no-op. Cleared on the next successful open.
+    open_note: Option<SharedString>,
     _poll: Task<()>,
 }
 
@@ -74,24 +72,20 @@ impl StrategiesPanel {
         let handle = workspace.clone();
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.strategies.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.connected = auracle_connect::load_config().api_key.is_some();
+                    this.strategies = Load::Pending;
+                    this.open_note = None;
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
                     workspace: handle,
-                    strategies: Vec::new(),
-                    status: if auracle_connect::load_config().api_key.is_some() {
-                        Status::Loading
-                    } else {
-                        Status::NotConnected
-                    },
+                    connected: auracle_connect::load_config().api_key.is_some(),
+                    strategies: Load::Pending,
+                    open_note: None,
                     _poll: poll,
                 }
             })
@@ -107,15 +101,21 @@ impl StrategiesPanel {
                     .update(cx, |this, cx| {
                         match fetched {
                             FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.strategies.clear();
+                                this.connected = false;
+                                this.strategies = Load::Pending;
                             }
+                            // A poll failure replaces the list with a designed,
+                            // retryable error rather than silently holding stale
+                            // rows — staleness must be honest (rubric item 3).
                             FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
+                                this.connected = true;
+                                this.strategies = Load::Failed(
+                                    "Your engine didn't answer. It may be stopped.".into(),
+                                );
                             }
                             FetchResult::Ok(items) => {
-                                this.status = Status::Connected;
-                                this.strategies = items;
+                                this.connected = true;
+                                this.strategies = Load::Done(items);
                             }
                         }
                         cx.notify();
@@ -149,8 +149,14 @@ impl StrategiesPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(abs) = self.resolve_abs(&module_path, cx) else {
+            // Resolution failed (no open worktree, or the path can't be split).
+            // Surface an honest note instead of a dead, silent click (rubric
+            // item 5: no dead controls).
+            self.open_note = Some("Open this folder as a project to edit strategy files.".into());
+            cx.notify();
             return;
         };
+        self.open_note = None;
         let workspace = self.workspace.clone();
         cx.spawn_in(window, async move |_this, cx| {
             workspace
@@ -170,22 +176,36 @@ impl StrategiesPanel {
         })
         .detach_and_log_err(cx);
     }
-}
 
-/// `strategies.example_ma.MACrossover` -> `strategies/example_ma.py`.
-fn module_to_relpath(module_path: &str) -> Option<String> {
-    let mut parts: Vec<&str> = module_path.split('.').filter(|p| !p.is_empty()).collect();
-    if parts.len() < 2 {
-        return None;
+    fn refetch(&mut self, cx: &mut Context<Self>) {
+        self.strategies = Load::Pending;
+        cx.notify();
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let fetched = fetch_strategies(http).await;
+            this.update(cx, |this, cx| {
+                this.strategies = match fetched {
+                    FetchResult::NotConnected => {
+                        this.connected = false;
+                        Load::Pending
+                    }
+                    FetchResult::Unreachable => {
+                        Load::Failed("Your engine didn't answer. It may be stopped.".into())
+                    }
+                    FetchResult::Ok(items) => Load::Done(items),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
-    parts.pop(); // drop the class / function name, leaving the module
-    Some(format!("{}.py", parts.join("/")))
 }
 
 enum FetchResult {
     NotConnected,
     Unreachable,
-    Ok(Vec<StrategyRow>),
+    Ok(Vec<StrategyListItem>),
 }
 
 async fn fetch_strategies(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
@@ -196,7 +216,7 @@ async fn fetch_strategies(http: Arc<dyn http_client::HttpClient>) -> FetchResult
     let url = config
         .engine_url
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let attempt: Result<Vec<StrategyRow>> = async {
+    let attempt: Result<Vec<StrategyListItem>> = async {
         let request = http_client::http::Request::builder()
             .uri(format!("{url}/ui/api/backtest/strategies"))
             .header("Cookie", format!("auracle_session={key}"))
@@ -208,32 +228,33 @@ async fn fetch_strategies(http: Arc<dyn http_client::HttpClient>) -> FetchResult
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
         let value: serde_json::Value = serde_json::from_str(&body)?;
-        let mut out = Vec::new();
-        if let Some(items) = value.get("strategies").and_then(|v| v.as_array()) {
-            for it in items {
-                let path = it.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-                if path.is_empty() {
-                    continue;
-                }
-                let name = path.rsplit('.').next().unwrap_or(path);
-                let doc = it
-                    .get("doc")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .lines()
-                    .next()
-                    .unwrap_or_default();
-                out.push(StrategyRow {
-                    name: SharedString::from(name.to_string()),
-                    path: SharedString::from(path.to_string()),
-                    doc: SharedString::from(doc.to_string()),
-                    bundled: it.get("bundled").and_then(|v| v.as_bool()).unwrap_or(false),
-                });
-            }
-        }
-        // User-written strategies first, bundled examples after, then by name.
-        out.sort_by(|a, b| a.bundled.cmp(&b.bundled).then(a.name.cmp(&b.name)));
-        Ok(out)
+        // Pull the raw `(path, doc, bundled)` tuples and let the reducer derive
+        // the name + first doc line, drop empty paths, and sort.
+        let raw: Vec<(String, String, bool)> = value
+            .get("strategies")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|it| {
+                        (
+                            it.get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            it.get("doc")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            it.get("bundled").and_then(|v| v.as_bool()).unwrap_or(false),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(strategy_rows(
+            raw.iter().map(|(p, d, b)| (p.as_str(), d.as_str(), *b)),
+        ))
     }
     .await;
     match attempt {
@@ -315,83 +336,19 @@ impl Render for StrategiesPanel {
                     .color(Color::Muted),
             );
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
-                .p_3()
-                .gap_2()
-                .child(Label::new("Not connected to your Auracle engine yet."))
-                .child(
-                    Button::new("strategies-connect", "Connect…")
-                        .style(ButtonStyle::Filled)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
-                        }),
-                )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Loading…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.strategies.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("No strategies yet. Create one under strategies/ and it shows up here.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
-                .id("strategies-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_0p5()
-                .children(self.strategies.iter().enumerate().map(|(ix, row)| {
-                    let path = row.path.clone();
-                    let doc = row.doc.clone();
-                    h_flex()
-                        .id(("strategy-row", ix))
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .items_start()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().colors().element_hover))
-                        .on_click(cx.listener(move |this, _ev, window, cx| {
-                            this.open_strategy(path.clone(), window, cx);
-                        }))
-                        .child(
-                            v_flex()
-                                .gap_0p5()
-                                .child(
-                                    h_flex()
-                                        .gap_1p5()
-                                        .child(Label::new(row.name.clone()).size(LabelSize::Small))
-                                        .when(row.bundled, |s| {
-                                            s.child(
-                                                Label::new("example")
-                                                    .size(LabelSize::XSmall)
-                                                    .color(Color::Muted),
-                                            )
-                                        }),
-                                )
-                                .when(!doc.is_empty(), |s| {
-                                    s.child(
-                                        Label::new(doc)
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
-                                    )
-                                }),
-                        )
-                }))
-                .into_any_element(),
+        // Disconnected is a pre-fetch state, kept outside the `Load` seam.
+        let body: AnyElement = if !self.connected {
+            render_not_connected()
+        } else {
+            let state = self.strategies.clone().into_list_view(
+                "No strategies yet. Create one under strategies/ and it shows up here.",
+            );
+            match state {
+                ViewState::Loading => render_loading(),
+                ViewState::Empty { hint } => render_empty(&hint),
+                ViewState::Error { message, retryable } => render_error(&message, retryable, cx),
+                ViewState::Ready(strategies) => self.render_list(&strategies, cx),
+            }
         };
 
         v_flex()
@@ -400,6 +357,133 @@ impl Render for StrategiesPanel {
             .size_full()
             .bg(cx.theme().colors().panel_background)
             .child(header)
+            .when_some(self.open_note.clone(), |this, note| {
+                this.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .child(Label::new(note).size(LabelSize::XSmall).color(Color::Muted)),
+                )
+            })
             .child(body)
+    }
+}
+
+/// The disconnected pre-state: offer Connect (never a false retryable error).
+fn render_not_connected() -> AnyElement {
+    v_flex()
+        .p_3()
+        .gap_2()
+        .child(Label::new("Not connected to your Auracle engine yet."))
+        .child(
+            Button::new("strategies-connect", "Connect…")
+                .style(ButtonStyle::Filled)
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(auracle_connect::Connect), cx);
+                }),
+        )
+        .into_any_element()
+}
+
+/// A designed skeleton — muted placeholder rows, not a bare "Loading…" label —
+/// while the strategies fetch is in flight.
+fn render_loading() -> AnyElement {
+    let skeleton_row = || {
+        ListItem::new("strategies-skeleton")
+            .spacing(ListItemSpacing::Sparse)
+            .child(
+                Label::new("Loading…")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+    };
+    v_flex()
+        .p_1()
+        .child(skeleton_row())
+        .child(Divider::horizontal().flex_grow_1())
+        .child(skeleton_row())
+        .child(Divider::horizontal().flex_grow_1())
+        .child(skeleton_row())
+        .into_any_element()
+}
+
+/// A designed empty state carrying the hint about what would appear here.
+fn render_empty(hint: &str) -> AnyElement {
+    v_flex()
+        .p_3()
+        .child(Label::new(hint.to_string()).color(Color::Muted))
+        .into_any_element()
+}
+
+/// An honest, retryable error — re-polls the engine once.
+fn render_error(message: &str, retryable: bool, cx: &mut Context<StrategiesPanel>) -> AnyElement {
+    v_flex()
+        .p_3()
+        .gap_2()
+        .child(
+            Label::new(message.to_string())
+                .size(LabelSize::Small)
+                .color(Color::Error),
+        )
+        .when(retryable, |this| {
+            this.child(
+                Button::new("strategies-retry", "Retry")
+                    .style(ButtonStyle::Outlined)
+                    .start_icon(
+                        Icon::new(IconName::RotateCcw)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.refetch(cx);
+                    })),
+            )
+        })
+        .into_any_element()
+}
+
+impl StrategiesPanel {
+    fn render_list(&self, strategies: &[StrategyListItem], cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .id("strategies-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .p_1()
+            .gap_0p5()
+            .children(strategies.iter().enumerate().map(|(index, row)| {
+                let path = SharedString::from(row.path.clone());
+                let name = SharedString::from(row.name.clone());
+                let doc = row.doc.clone();
+                let bundled = row.bundled;
+                ListItem::new(("strategy-row", index))
+                    .spacing(ListItemSpacing::Sparse)
+                    .on_click(cx.listener(move |this, _ev, window, cx| {
+                        this.open_strategy(path.clone(), window, cx);
+                    }))
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                h_flex()
+                                    .gap_1p5()
+                                    .child(Label::new(name).size(LabelSize::Small))
+                                    .when(bundled, |s| {
+                                        s.child(
+                                            Label::new("example")
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            )
+                            .when(!doc.is_empty(), |s| {
+                                s.child(
+                                    Label::new(SharedString::from(doc))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                            }),
+                    )
+            }))
+            .into_any_element()
     }
 }

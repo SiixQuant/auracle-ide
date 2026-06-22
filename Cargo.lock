@@ -1516,6 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "auracle_runway"
+name = "auracle_schedules"
 version = "0.1.0"
 
 [[package]]
@@ -1546,6 +1547,12 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
+name = "auracle_strategies"
+version = "0.1.0"
+
+[[package]]
+name = "auracle_validation"
+version = "0.1.0"
 
 [[package]]
 name = "auracle_view_state"
@@ -16152,6 +16159,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_schedules",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -17690,6 +17699,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_strategies",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -20128,6 +20139,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_strategies",
+ "auracle_validation",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
