@@ -11,6 +11,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_feeds::{FeedTone, event_tone};
+use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -89,9 +91,9 @@ impl RunsDock {
                 } else {
                     Status::Connecting
                 };
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| this.reconnect(cx),
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.reconnect(cx)
+                })
                 .detach();
                 let mut this = Self {
                     focus_handle: cx.focus_handle(),
@@ -116,14 +118,8 @@ impl RunsDock {
             );
             let mut backoff = Duration::from_secs(2);
             loop {
-                let attempt = run_stream_once(
-                    http.clone(),
-                    &config.base_url,
-                    &cookie,
-                    &this,
-                    cx,
-                )
-                .await;
+                let attempt =
+                    run_stream_once(http.clone(), &config.base_url, &cookie, &this, cx).await;
                 let keep_going = this
                     .update(cx, |this, cx| {
                         this.status = Status::Reconnecting;
@@ -181,18 +177,83 @@ impl RunsDock {
     }
 
     fn kind_color(&self, kind: &str, cx: &App) -> Hsla {
-        let status = cx.theme().status();
-        if kind.ends_with("failed") || kind == "log.error" {
-            status.error
-        } else if kind.starts_with("order.") {
-            status.info
-        } else if kind == "log.warning" || kind.ends_with("skipped") {
-            status.warning
-        } else if kind.ends_with("succeeded") || kind.ends_with("filled") {
-            status.success
-        } else {
-            cx.theme().colors().text_muted
-        }
+        // The kind -> tone decision lives in `auracle_feeds::event_tone` (gpui-free,
+        // unit-tested); this method only maps that tone to a theme colour, so the
+        // render path holds no colour literals and the decision stays testable.
+        tone_color(event_tone(kind), cx)
+    }
+
+    fn render_rows(&self, rows: &[EventRow], cx: &Context<Self>) -> AnyElement {
+        v_flex()
+            .id("runs-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .children(rows.iter().enumerate().map(|(ix, row)| {
+                let color = self.kind_color(&row.kind, cx);
+                // The colored dot's meaning, on hover, for the power
+                // user — the plain sentence is the novice layer.
+                let kind = row.kind.clone();
+                h_flex()
+                    .id(("run-row", ix))
+                    .px_2()
+                    .py_0p5()
+                    .gap_2()
+                    .tooltip(move |_, cx| ui::Tooltip::simple(kind.clone(), cx))
+                    .child(div().size_1p5().rounded_full().flex_none().bg(color))
+                    .child(Label::new(row.plain.clone()).size(LabelSize::Small))
+                    .child(div().flex_1())
+                    .child(
+                        Label::new(row.ts.clone())
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+            }))
+            .into_any_element()
+    }
+}
+
+/// A designed skeleton — placeholder rows, not a blank panel — while the first
+/// `/recent` snapshot is in flight. Mirrors `account_setup::render_loading`:
+/// muted "Loading…" placeholder rows, so an in-flight first fetch reads as
+/// loading rather than as the empty state.
+fn render_skeleton() -> AnyElement {
+    let skeleton_row = || {
+        h_flex().px_2().py_0p5().child(
+            Label::new("Loading…")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+    };
+    v_flex()
+        .p_1()
+        .gap_0p5()
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .into_any_element()
+}
+
+/// The designed empty state — a successful fetch with nothing yet to show.
+fn render_empty(hint: &str) -> AnyElement {
+    v_flex()
+        .p_3()
+        .child(Label::new(hint.to_string()).color(Color::Muted))
+        .into_any_element()
+}
+
+/// Map a feed tone to the theme colour the row dot renders in. Only theme tokens
+/// — never a colour literal — so the panel tracks the active theme. Mirrors the
+/// `account_setup::tone_color` shape, resolved against `StatusColors` here because
+/// the runs dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
+fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
+    let status = cx.theme().status();
+    match tone {
+        FeedTone::Negative => status.error,
+        FeedTone::Info => status.info,
+        FeedTone::Caution => status.warning,
+        FeedTone::Positive => status.success,
+        FeedTone::Ignored => status.ignored,
+        FeedTone::Neutral => cx.theme().colors().text_muted,
     }
 }
 
@@ -252,9 +313,7 @@ async fn run_stream_once(
             let frame: String = pending.drain(..idx + 2).collect();
             for line in frame.lines() {
                 if let Some(json) = line.strip_prefix("data: ") {
-                    if let Ok(value) =
-                        serde_json::from_str::<serde_json::Value>(json)
-                    {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
                         this.update(cx, |this, cx| {
                             this.push_event(&value);
                             cx.notify();
@@ -329,8 +388,14 @@ impl Render for RunsDock {
             Status::Reconnecting => (cx.theme().status().warning, "reconnecting…"),
         };
 
-        let body: AnyElement = match self.status {
-            Status::NotConfigured => v_flex()
+        // `NotConfigured` is not a fetch outcome — it's the pre-state before the
+        // panel ever reaches for the stream — so it's rendered out of band, ahead
+        // of the `Load`/`ViewState` seam. Everything else (Connecting / Reconnecting
+        // / Connected) is a fetch lifecycle and flows through the seam, so empty /
+        // loading / ready are the *designed* states, not hand-rolled branches that
+        // can silently disagree.
+        let body: AnyElement = if self.status == Status::NotConfigured {
+            v_flex()
                 .p_3()
                 .gap_2()
                 .child(Label::new(
@@ -341,58 +406,39 @@ impl Render for RunsDock {
                     Button::new("runs-connect", "Connect…")
                         .style(ButtonStyle::Filled)
                         .on_click(|_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(auracle_connect::Connect),
-                                cx,
-                            );
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
                         }),
                 )
-                .into_any_element(),
-            _ if self.rows.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new(
-                        "Runs appear here the moment something executes.",
-                    )
-                    .color(Color::Muted),
-                )
-                .into_any_element(),
-            _ => v_flex()
-                .id("runs-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .children(self.rows.iter().enumerate().map(|(ix, row)| {
-                    let color = self.kind_color(&row.kind, cx);
-                    // The colored dot's meaning, on hover, for the power
-                    // user — the plain sentence is the novice layer.
-                    let kind = row.kind.clone();
-                    h_flex()
-                        .id(("run-row", ix))
-                        .px_2()
-                        .py_0p5()
-                        .gap_2()
-                        .tooltip(move |_, cx| {
-                            ui::Tooltip::simple(kind.clone(), cx)
-                        })
-                        .child(
-                            div()
-                                .size_1p5()
-                                .rounded_full()
-                                .flex_none()
-                                .bg(color),
-                        )
-                        .child(
-                            Label::new(row.plain.clone())
-                                .size(LabelSize::Small),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            Label::new(row.ts.clone())
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted),
-                        )
-                }))
-                .into_any_element(),
+                .into_any_element()
+        } else {
+            // Connecting / Reconnecting with nothing buffered yet is genuinely
+            // loading the first snapshot — render a skeleton, not the empty hint
+            // (which would dishonestly claim "nothing has happened" during the
+            // in-flight first fetch). Once rows exist, show them even while
+            // reconnecting; the header dot already carries the "reconnecting…"
+            // truth, so a transient reconnect must not blank a populated feed.
+            let load = match self.status {
+                Status::Connecting | Status::Reconnecting if self.rows.is_empty() => Load::Pending,
+                // `EventRow` is `Clone` (its fields are `Arc`-backed `SharedString`s),
+                // so collecting the ring buffer to a `Vec` for the seam is a cheap
+                // refcount bump per row; the seam takes `Load<Vec<T>>`.
+                _ => Load::Done(self.rows.iter().cloned().collect::<Vec<EventRow>>()),
+            };
+            let state = load.into_list_view("Runs appear here the moment something executes.");
+            match state {
+                // The stream loop reconnects forever and never surfaces a hard
+                // error to the panel, so the only states here are Loading / Empty
+                // / Ready — there is no retryable Error and so, honestly, no Retry
+                // button (unlike blotter/incidents, which can hit a dead poll).
+                ViewState::Loading => render_skeleton(),
+                ViewState::Empty { hint } => render_empty(&hint),
+                ViewState::Error { message, .. } => {
+                    // Unreachable by construction (no failed `Load` is built here),
+                    // but handled rather than panicked: show it honestly.
+                    render_empty(&message)
+                }
+                ViewState::Ready(rows) => self.render_rows(&rows, cx),
+            }
         };
 
         v_flex()

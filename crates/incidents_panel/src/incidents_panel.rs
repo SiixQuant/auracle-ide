@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_feeds::{FeedTone, severity_tone};
+use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -82,13 +84,11 @@ impl IncidentsPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.incidents.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.status = Status::Loading;
+                    this.incidents.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
@@ -114,22 +114,7 @@ impl IncidentsPanel {
                 let fetched = fetch_incidents(http.clone()).await;
                 let ok = this
                     .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.incidents.clear();
-                            }
-                            FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
-                            }
-                            FetchResult::Ok(items, csrf) => {
-                                this.status = Status::Connected;
-                                this.incidents = items;
-                                if csrf.is_some() {
-                                    this.csrf = csrf;
-                                }
-                            }
-                        }
+                        this.apply_fetch(fetched);
                         cx.notify();
                     })
                     .is_ok();
@@ -141,13 +126,58 @@ impl IncidentsPanel {
         })
     }
 
-    fn severity_color(&self, severity: &str, cx: &App) -> Hsla {
-        let status = cx.theme().status();
-        match severity {
-            "error" => status.error,
-            "warning" => status.warning,
-            _ => status.info,
+    /// Apply a fetch outcome to panel state. Shared by the poll and the manual
+    /// `refetch` (Retry), so both reach the same state from the same outcome —
+    /// the Retry path can't drift from the poll path.
+    fn apply_fetch(&mut self, fetched: FetchResult) {
+        match fetched {
+            FetchResult::NotConnected => {
+                self.status = Status::NotConnected;
+                self.incidents.clear();
+            }
+            FetchResult::Unreachable => {
+                self.status = Status::Unreachable;
+            }
+            FetchResult::Ok(items, csrf) => {
+                self.status = Status::Connected;
+                self.incidents = items;
+                // Only overwrite the captured token when the GET issued a fresh
+                // one — a poll that returns no Set-Cookie must not clear it.
+                if csrf.is_some() {
+                    self.csrf = csrf;
+                }
+            }
         }
+    }
+
+    /// Fetch once now, off the 30s cadence — the Retry affordance on the
+    /// unreachable error state. Shows Loading immediately so the click reads as
+    /// acted-upon, then applies the outcome through the same `apply_fetch` the
+    /// poll uses.
+    fn refetch(&mut self, cx: &mut Context<Self>) {
+        self.status = Status::Loading;
+        cx.notify();
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let fetched = fetch_incidents(http).await;
+            // The fetch outcome (incl. an unreachable engine) is applied to UI
+            // state by `apply_fetch` — never silently dropped. The `.ok()` only
+            // tolerates the panel having been closed mid-fetch, matching the
+            // poll/dismiss paths in this file.
+            this.update(cx, |this, cx| {
+                this.apply_fetch(fetched);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn severity_color(&self, severity: &str, cx: &App) -> Hsla {
+        // The severity -> tone decision lives in `auracle_feeds::severity_tone`
+        // (gpui-free, unit-tested); this method only maps that tone to a theme
+        // colour, so the render path holds no colour literals.
+        tone_color(severity_tone(severity), cx)
     }
 
     fn dismiss(&mut self, incident: &Incident, cx: &mut Context<Self>) {
@@ -167,6 +197,159 @@ impl IncidentsPanel {
         })
         .detach();
     }
+
+    fn render_cards(&self, incidents: &[Incident], cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .id("incidents-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .p_1()
+            .gap_1()
+            .children(incidents.iter().map(|incident| {
+                let dot = self.severity_color(&incident.severity, cx);
+                let is_open = self.expanded.contains(&incident.row_id);
+                let row_id = incident.row_id.clone();
+                let has_detail = !incident.detail.is_empty();
+                // When the CSRF token hasn't landed yet (`csrf` is None), the
+                // Dismiss control is omitted rather than shown-but-broken. This
+                // is transient: the incidents GET issues the token, so the next
+                // 30s poll (or a manual Retry) restores Dismiss within one cycle.
+                // A disabled/tooltipped affordance is deliberately out of scope.
+                let can_dismiss = self.csrf.is_some();
+                let incident_for_dismiss = incident.clone();
+                v_flex()
+                    .p_2()
+                    .gap_1()
+                    .rounded_md()
+                    .bg(cx.theme().colors().elevated_surface_background)
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_start()
+                            .child(div().mt_1().size_1p5().rounded_full().flex_none().bg(dot))
+                            .child(Label::new(incident.cause.clone()).size(LabelSize::Small))
+                            .child(div().flex_1())
+                            .when(can_dismiss, |row| {
+                                row.child(
+                                    Button::new(
+                                        SharedString::from(format!("dismiss-{row_id}")),
+                                        "Dismiss",
+                                    )
+                                    .style(ButtonStyle::Subtle)
+                                    .label_size(LabelSize::XSmall)
+                                    .tooltip(ui::Tooltip::text("Mark as seen and hide it."))
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.dismiss(&incident_for_dismiss, cx);
+                                        },
+                                    )),
+                                )
+                            }),
+                    )
+                    .when(has_detail, |card| {
+                        let toggle_id: SharedString = format!("toggle-{row_id}").into();
+                        card.child(
+                            Button::new(
+                                toggle_id,
+                                if is_open {
+                                    "hide details"
+                                } else {
+                                    "show details"
+                                },
+                            )
+                            .style(ButtonStyle::Subtle)
+                            .label_size(LabelSize::XSmall)
+                            .on_click(cx.listener({
+                                let row_id = row_id.clone();
+                                move |this, _, _, cx| {
+                                    if !this.expanded.remove(&row_id) {
+                                        this.expanded.insert(row_id.clone());
+                                    }
+                                    cx.notify();
+                                }
+                            })),
+                        )
+                    })
+                    .when(is_open && has_detail, |card| {
+                        card.child(
+                            Label::new(incident.detail.clone())
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                    })
+            }))
+            .into_any_element()
+    }
+}
+
+/// A designed skeleton — placeholder rows, not a bare "Checking…" line — while a
+/// fetch is in flight. Mirrors `account_setup::render_loading`.
+fn render_skeleton() -> AnyElement {
+    let skeleton_row = || {
+        h_flex().px_2().py_1().child(
+            Label::new("Loading…")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+    };
+    v_flex()
+        .p_1()
+        .gap_1()
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .into_any_element()
+}
+
+/// The designed empty state — a successful fetch with no incidents to show.
+fn render_empty(hint: &str) -> AnyElement {
+    v_flex()
+        .p_3()
+        .child(Label::new(hint.to_string()).color(Color::Muted))
+        .into_any_element()
+}
+
+/// An honest, retryable error state — the engine was unreachable — with a Retry
+/// that forces an immediate refetch off the 30s poll cadence. Mirrors
+/// `account_setup::render_error`.
+fn render_error(message: &str, retryable: bool, cx: &mut Context<IncidentsPanel>) -> AnyElement {
+    v_flex()
+        .p_3()
+        .gap_2()
+        .child(Label::new(message.to_string()).color(Color::Muted))
+        .when(retryable, |this| {
+            this.child(
+                Button::new("incidents-retry", "Retry")
+                    .style(ButtonStyle::Outlined)
+                    .label_size(LabelSize::XSmall)
+                    .size(ButtonSize::Compact)
+                    .start_icon(
+                        Icon::new(IconName::RotateCcw)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.refetch(cx))),
+            )
+        })
+        .into_any_element()
+}
+
+/// Map a feed tone to the theme colour the severity dot renders in. Only theme
+/// tokens — never a colour literal — so the panel tracks the active theme.
+/// Mirrors `account_setup::tone_color`, resolved against `StatusColors` here
+/// because the dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
+fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
+    let status = cx.theme().status();
+    match tone {
+        FeedTone::Negative => status.error,
+        FeedTone::Caution => status.warning,
+        // Info and the neutral default both read as informational — incidents
+        // never emit Positive/Ignored/Neutral (severity_tone falls back to
+        // Info), so this is the honest catch-all for an info-level incident.
+        FeedTone::Info | FeedTone::Positive | FeedTone::Ignored | FeedTone::Neutral => status.info,
+    }
 }
 
 enum FetchResult {
@@ -176,11 +359,11 @@ enum FetchResult {
 }
 
 /// Pull the value of a Set-Cookie named cookie out of response headers.
-fn cookie_from_headers(
-    headers: &http_client::http::HeaderMap,
-    name: &str,
-) -> Option<SharedString> {
-    for value in headers.get_all(http_client::http::header::SET_COOKIE).iter() {
+fn cookie_from_headers(headers: &http_client::http::HeaderMap, name: &str) -> Option<SharedString> {
+    for value in headers
+        .get_all(http_client::http::header::SET_COOKIE)
+        .iter()
+    {
         // Skip a non-UTF-8 header rather than abandoning the rest.
         let Ok(raw) = value.to_str() else { continue };
         for part in raw.split(';') {
@@ -223,10 +406,7 @@ async fn fetch_incidents(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
             for it in items {
                 let kind = it.get("kind").and_then(|v| v.as_str()).unwrap_or("");
                 let id = it.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-                let cause = it
-                    .get("cause")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let cause = it.get("cause").and_then(|v| v.as_str()).unwrap_or_default();
                 if cause.is_empty() {
                     continue;
                 }
@@ -288,7 +468,10 @@ async fn post_dismiss(
     let request = http_client::http::Request::builder()
         .method(http_client::http::Method::POST)
         .uri(format!("{url}/ui/api/alerts/dismiss"))
-        .header("Cookie", format!("auracle_session={key}; auracle_csrf={csrf}"))
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
         .header("X-CSRF-Token", csrf.to_string())
         .header("Content-Type", "application/json")
         .body(http_client::AsyncBody::from(body))?;
@@ -372,139 +555,46 @@ impl Render for IncidentsPanel {
                     .color(Color::Muted),
             );
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
+        // `NotConnected` is the pre-state before the panel ever reaches for the
+        // feed — not a fetch outcome — so it's rendered out of band, ahead of the
+        // `Load`/`ViewState` seam. Loading / Unreachable / Connected are fetch
+        // lifecycle states and flow through the seam, so loading is a designed
+        // skeleton, an unreachable engine is a *retryable* error (with Retry),
+        // and empty is the designed empty state — none of them hand-rolled.
+        let body: AnyElement = if self.status == Status::NotConnected {
+            v_flex()
                 .p_3()
                 .gap_2()
-                .child(Label::new(
-                    "Not connected to your Auracle engine yet.",
-                ))
+                .child(Label::new("Not connected to your Auracle engine yet."))
                 .child(
                     Button::new("incidents-connect", "Connect…")
                         .style(ButtonStyle::Filled)
                         .on_click(|_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(auracle_connect::Connect),
-                                cx,
-                            );
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
                         }),
                 )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Checking…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new(
-                        "Your engine didn't answer. It may be stopped.",
-                    )
-                    .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.incidents.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Nothing needs your attention right now.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
-                .id("incidents-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_1()
-                .children(self.incidents.iter().map(|incident| {
-                    let dot = self.severity_color(&incident.severity, cx);
-                    let is_open = self.expanded.contains(&incident.row_id);
-                    let row_id = incident.row_id.clone();
-                    let has_detail = !incident.detail.is_empty();
-                    let can_dismiss = self.csrf.is_some();
-                    let incident_for_dismiss = incident.clone();
-                    v_flex()
-                        .p_2()
-                        .gap_1()
-                        .rounded_md()
-                        .bg(cx.theme().colors().elevated_surface_background)
-                        .border_1()
-                        .border_color(cx.theme().colors().border)
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .items_start()
-                                .child(
-                                    div()
-                                        .mt_1()
-                                        .size_1p5()
-                                        .rounded_full()
-                                        .flex_none()
-                                        .bg(dot),
-                                )
-                                .child(
-                                    Label::new(incident.cause.clone())
-                                        .size(LabelSize::Small),
-                                )
-                                .child(div().flex_1())
-                                .when(can_dismiss, |row| {
-                                    row.child(
-                                        Button::new(
-                                            SharedString::from(format!(
-                                                "dismiss-{row_id}"
-                                            )),
-                                            "Dismiss",
-                                        )
-                                        .style(ButtonStyle::Subtle)
-                                        .label_size(LabelSize::XSmall)
-                                        .tooltip(ui::Tooltip::text(
-                                            "Mark as seen and hide it.",
-                                        ))
-                                        .on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                this.dismiss(
-                                                    &incident_for_dismiss,
-                                                    cx,
-                                                );
-                                            },
-                                        )),
-                                    )
-                                }),
-                        )
-                        .when(has_detail, |card| {
-                            let toggle_id: SharedString =
-                                format!("toggle-{row_id}").into();
-                            card.child(
-                                Button::new(
-                                    toggle_id,
-                                    if is_open {
-                                        "hide details"
-                                    } else {
-                                        "show details"
-                                    },
-                                )
-                                .style(ButtonStyle::Subtle)
-                                .label_size(LabelSize::XSmall)
-                                .on_click(cx.listener({
-                                    let row_id = row_id.clone();
-                                    move |this, _, _, cx| {
-                                        if !this.expanded.remove(&row_id) {
-                                            this.expanded.insert(row_id.clone());
-                                        }
-                                        cx.notify();
-                                    }
-                                })),
-                            )
-                        })
-                        .when(is_open && has_detail, |card| {
-                            card.child(
-                                Label::new(incident.detail.clone())
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                        })
-                }))
-                .into_any_element(),
+                .into_any_element()
+        } else {
+            let load = match self.status {
+                Status::Loading => Load::Pending,
+                // An unreachable engine is a transient failure the poll
+                // auto-recovers from in ≤30s — but the user gets a manual Retry
+                // too, so the state is the designed *retryable* error, not a
+                // dead end.
+                Status::Unreachable => {
+                    Load::Failed("Your engine didn't answer. It may be stopped.".to_string())
+                }
+                // `Status::NotConnected` is handled above; `Status::Connected`
+                // falls here with the current incidents.
+                _ => Load::Done(self.incidents.clone()),
+            };
+            let state = load.into_list_view("Nothing needs your attention right now.");
+            match state {
+                ViewState::Loading => render_skeleton(),
+                ViewState::Empty { hint } => render_empty(&hint),
+                ViewState::Error { message, retryable } => render_error(&message, retryable, cx),
+                ViewState::Ready(incidents) => self.render_cards(&incidents, cx),
+            }
         };
 
         v_flex()
