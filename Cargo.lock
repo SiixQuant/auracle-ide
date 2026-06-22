@@ -1476,6 +1476,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_feeds"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_onboarding"
 version = "0.1.0"
 dependencies = [
