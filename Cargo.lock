@@ -16126,6 +16126,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_schedules",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -17664,6 +17666,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_strategies",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -20102,6 +20106,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_strategies",
+ "auracle_validation",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
