@@ -1430,6 +1430,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_cockpit_state"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "auracle_connect"
 version = "0.1.0"
 dependencies = [
@@ -1516,6 +1523,13 @@ dependencies = [
  "serde_json",
  "ui",
  "workspace",
+]
+
+[[package]]
+name = "auracle_studio_results"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

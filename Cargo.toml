@@ -20,6 +20,7 @@ members = [
     "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
     "crates/auracle_cockpit",
+    "crates/auracle_cockpit_state",
     "crates/auracle_connect",
     "crates/auracle_connections",
     "crates/auracle_data_sources",
@@ -27,6 +28,7 @@ members = [
     "crates/auracle_onboarding",
     "crates/auracle_spec_compiler",
     "crates/auracle_status",
+    "crates/auracle_studio_results",
     "crates/auracle_view_state",
     "crates/auto_update",
     "crates/auto_update_helper",
@@ -453,6 +455,7 @@ auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_ai_settings = { path = "crates/auracle_ai_settings" }
 auracle_backtest_results = { path = "crates/auracle_backtest_results" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
+auracle_cockpit_state = { path = "crates/auracle_cockpit_state" }
 auracle_connect = { path = "crates/auracle_connect" }
 auracle_connections = { path = "crates/auracle_connections" }
 auracle_data_sources = { path = "crates/auracle_data_sources" }
@@ -460,6 +463,7 @@ auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_spec_compiler = { path = "crates/auracle_spec_compiler" }
 auracle_status = { path = "crates/auracle_status" }
+auracle_studio_results = { path = "crates/auracle_studio_results" }
 auracle_view_state = { path = "crates/auracle_view_state" }
 blotter_panel = { path = "crates/blotter_panel" }
 incidents_panel = { path = "crates/incidents_panel" }
