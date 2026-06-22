@@ -1,0 +1,15 @@
+[package]
+name = "auracle_feeds"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/auracle_feeds.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]

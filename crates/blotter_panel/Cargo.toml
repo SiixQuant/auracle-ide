@@ -15,6 +15,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 auracle_connect.workspace = true
+auracle_feeds.workspace = true
+auracle_view_state.workspace = true
 futures.workspace = true
 gpui.workspace = true
 http_client.workspace = true

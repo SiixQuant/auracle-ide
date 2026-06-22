@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_feeds::{FeedTone, is_cancellable, order_tone};
+use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -81,13 +83,11 @@ impl BlotterPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.orders.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.status = Status::Loading;
+                    this.orders.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
@@ -113,20 +113,7 @@ impl BlotterPanel {
                 let fetched = fetch_orders(http.clone()).await;
                 let ok = this
                     .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.orders.clear();
-                            }
-                            FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
-                            }
-                            FetchResult::Ok(items) => {
-                                this.status = Status::Connected;
-                                this.orders = items;
-                                this.last_error = None;
-                            }
-                        }
+                        this.apply_fetch(fetched);
                         cx.notify();
                     })
                     .is_ok();
@@ -138,34 +125,53 @@ impl BlotterPanel {
         })
     }
 
-    fn status_color(&self, status: &str, cx: &App) -> Hsla {
-        let colors = cx.theme().status();
-        match status.to_lowercase().as_str() {
-            "filled" | "executed" => colors.success,
-            "rejected" | "failed" | "error" => colors.error,
-            "cancelled" | "canceled" => colors.ignored,
-            _ => colors.info, // submitted / pending / routed — on its way
+    /// Apply a fetch outcome to panel state. Shared by the poll and the manual
+    /// `refetch` (Retry), so both reach the same state from the same outcome —
+    /// the Retry path can't drift from the poll path.
+    fn apply_fetch(&mut self, fetched: FetchResult) {
+        match fetched {
+            FetchResult::NotConnected => {
+                self.status = Status::NotConnected;
+                self.orders.clear();
+            }
+            FetchResult::Unreachable => {
+                self.status = Status::Unreachable;
+            }
+            FetchResult::Ok(items) => {
+                self.status = Status::Connected;
+                self.orders = items;
+                self.last_error = None;
+            }
         }
     }
 
-    /// Whether an order is still working at the broker and therefore
-    /// cancellable. A positive allowlist of the engine's in-flight statuses
-    /// (`pending` / `sent` / `partially_filled`, plus the broker-snapshot
-    /// words `working` / `open` / `submitted` / `routed`). Notably `dry_run`
-    /// is NOT cancellable — it's a preview that never reached a broker — and
-    /// the terminal statuses (`executed` / `filled` / `cancelled` /
-    /// `rejected` / `failed`) are done.
-    fn is_cancellable(status: &str) -> bool {
-        matches!(
-            status.to_lowercase().as_str(),
-            "pending"
-                | "sent"
-                | "partially_filled"
-                | "working"
-                | "open"
-                | "submitted"
-                | "routed"
-        )
+    /// Fetch once now, off the 30s cadence — the Retry affordance on the
+    /// unreachable error state. Shows Loading immediately so the click reads as
+    /// acted-upon, then applies the outcome through the same `apply_fetch` the
+    /// poll uses.
+    fn refetch(&mut self, cx: &mut Context<Self>) {
+        self.status = Status::Loading;
+        cx.notify();
+        let http = cx.http_client();
+        self._action = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let fetched = fetch_orders(http).await;
+            // The fetch outcome (incl. an unreachable engine) is applied to UI
+            // state by `apply_fetch` — never silently dropped. The `.ok()` only
+            // tolerates the panel having been closed mid-fetch, matching the
+            // poll/cancel paths in this file.
+            this.update(cx, |this, cx| {
+                this.apply_fetch(fetched);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn status_color(&self, status: &str, cx: &App) -> Hsla {
+        // The status -> tone decision lives in `auracle_feeds::order_tone`
+        // (gpui-free, unit-tested); this method only maps that tone to a theme
+        // colour, so the render path holds no colour literals.
+        tone_color(order_tone(status), cx)
     }
 
     fn cancel_order(&mut self, order_id: SharedString, cx: &mut Context<Self>) {
@@ -178,7 +184,8 @@ impl BlotterPanel {
                 post_mutation(http.clone(), &format!("/ui/api/orders/cancel/{order_id}")).await
             {
                 this.update(cx, |this, cx| {
-                    this.last_error = Some(SharedString::from(format!("Couldn't cancel: {error}.")));
+                    this.last_error =
+                        Some(SharedString::from(format!("Couldn't cancel: {error}.")));
                     cx.notify();
                 })
                 .ok();
@@ -218,6 +225,119 @@ impl BlotterPanel {
             })
             .ok();
         }));
+    }
+
+    fn render_orders(&self, orders: &[Order], cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .id("blotter-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .p_1()
+            .gap_0p5()
+            .children(orders.iter().map(|order| {
+                let dot = self.status_color(&order.status, cx);
+                // A per-row Cancel is only honest when the row is still
+                // working AND carries the broker order id the cancel
+                // route addresses (the activity feed exposes the DB row
+                // id, which the route would NOT match). Until the engine
+                // adds `broker_order_id` to /ui/api/orders, this stays
+                // hidden and the header "Cancel all" carries cancel.
+                let cancel_target = order
+                    .broker_order_id
+                    .clone()
+                    .filter(|_| is_cancellable(&order.status));
+                h_flex()
+                    .px_2()
+                    .py_1()
+                    .gap_2()
+                    .items_start()
+                    .rounded_sm()
+                    .child(div().mt_1().size_1p5().rounded_full().flex_none().bg(dot))
+                    .child(Label::new(order.plain.clone()).size(LabelSize::Small))
+                    .when_some(cancel_target, |row, order_id| {
+                        row.child(div().flex_1()).child(
+                            Button::new(SharedString::from(format!("cancel-{order_id}")), "Cancel")
+                                .style(ButtonStyle::Subtle)
+                                .label_size(LabelSize::XSmall)
+                                .color(Color::Error)
+                                .tooltip(ui::Tooltip::text("Cancel this working order"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.cancel_order(order_id.clone(), cx);
+                                })),
+                        )
+                    })
+            }))
+            .into_any_element()
+    }
+}
+
+/// A designed skeleton — placeholder rows, not a bare "Checking…" line — while a
+/// fetch is in flight. Mirrors `account_setup::render_loading`.
+fn render_skeleton() -> AnyElement {
+    let skeleton_row = || {
+        h_flex().px_2().py_1().child(
+            Label::new("Loading…")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+    };
+    v_flex()
+        .p_1()
+        .gap_0p5()
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .child(skeleton_row())
+        .into_any_element()
+}
+
+/// The designed empty state — a successful fetch with no orders to show.
+fn render_empty(hint: &str) -> AnyElement {
+    v_flex()
+        .p_3()
+        .child(Label::new(hint.to_string()).color(Color::Muted))
+        .into_any_element()
+}
+
+/// An honest, retryable error state — the engine was unreachable — with a Retry
+/// that forces an immediate refetch off the 30s poll cadence. Mirrors
+/// `account_setup::render_error`.
+fn render_error(message: &str, retryable: bool, cx: &mut Context<BlotterPanel>) -> AnyElement {
+    v_flex()
+        .p_3()
+        .gap_2()
+        .child(Label::new(message.to_string()).color(Color::Muted))
+        .when(retryable, |this| {
+            this.child(
+                Button::new("blotter-retry", "Retry")
+                    .style(ButtonStyle::Outlined)
+                    .label_size(LabelSize::XSmall)
+                    .size(ButtonSize::Compact)
+                    .start_icon(
+                        Icon::new(IconName::RotateCcw)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.refetch(cx))),
+            )
+        })
+        .into_any_element()
+}
+
+/// Map a feed tone to the theme colour the status dot renders in. Only theme
+/// tokens — never a colour literal — so the panel tracks the active theme.
+/// Mirrors `account_setup::tone_color`, resolved against `StatusColors` here
+/// because the dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
+fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
+    let status = cx.theme().status();
+    match tone {
+        FeedTone::Positive => status.success,
+        FeedTone::Negative => status.error,
+        FeedTone::Ignored => status.ignored,
+        FeedTone::Caution => status.warning,
+        // Info and the neutral default both read as "on its way" — the blotter
+        // never emits Neutral (order_tone falls back to Info), so this is the
+        // honest catch-all for an in-flight order.
+        FeedTone::Info | FeedTone::Neutral => status.info,
     }
 }
 
@@ -409,7 +529,7 @@ impl Render for BlotterPanel {
             && self
                 .orders
                 .iter()
-                .any(|order| Self::is_cancellable(&order.status));
+                .any(|order| is_cancellable(&order.status));
 
         let header = h_flex()
             .px_2()
@@ -443,8 +563,14 @@ impl Render for BlotterPanel {
                 )
             });
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
+        // `NotConnected` is the pre-state before the panel ever reaches for the
+        // feed — not a fetch outcome — so it's rendered out of band, ahead of the
+        // `Load`/`ViewState` seam. Loading / Unreachable / Connected are fetch
+        // lifecycle states and flow through the seam, so loading is a designed
+        // skeleton, an unreachable engine is a *retryable* error (with Retry),
+        // and empty is the designed empty state — none of them hand-rolled.
+        let body: AnyElement = if self.status == Status::NotConnected {
+            v_flex()
                 .p_3()
                 .gap_2()
                 .child(Label::new("Not connected to your Auracle engine yet."))
@@ -452,83 +578,32 @@ impl Render for BlotterPanel {
                     Button::new("blotter-connect", "Connect…")
                         .style(ButtonStyle::Filled)
                         .on_click(|_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(auracle_connect::Connect),
-                                cx,
-                            );
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
                         }),
                 )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Checking…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.orders.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("No orders yet. Trades show up here once a strategy places them.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
-                .id("blotter-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_0p5()
-                .children(self.orders.iter().map(|order| {
-                    let dot = self.status_color(&order.status, cx);
-                    // A per-row Cancel is only honest when the row is still
-                    // working AND carries the broker order id the cancel
-                    // route addresses (the activity feed exposes the DB row
-                    // id, which the route would NOT match). Until the engine
-                    // adds `broker_order_id` to /ui/api/orders, this stays
-                    // hidden and the header "Cancel all" carries cancel.
-                    let cancel_target = order
-                        .broker_order_id
-                        .clone()
-                        .filter(|_| Self::is_cancellable(&order.status));
-                    h_flex()
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .items_start()
-                        .rounded_sm()
-                        .child(
-                            div()
-                                .mt_1()
-                                .size_1p5()
-                                .rounded_full()
-                                .flex_none()
-                                .bg(dot),
-                        )
-                        .child(
-                            Label::new(order.plain.clone()).size(LabelSize::Small),
-                        )
-                        .when_some(cancel_target, |row, order_id| {
-                            row.child(div().flex_1()).child(
-                                Button::new(
-                                    SharedString::from(format!("cancel-{order_id}")),
-                                    "Cancel",
-                                )
-                                .style(ButtonStyle::Subtle)
-                                .label_size(LabelSize::XSmall)
-                                .color(Color::Error)
-                                .tooltip(ui::Tooltip::text("Cancel this working order"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.cancel_order(order_id.clone(), cx);
-                                })),
-                            )
-                        })
-                }))
-                .into_any_element(),
+                .into_any_element()
+        } else {
+            let load = match self.status {
+                Status::Loading => Load::Pending,
+                // An unreachable engine is a transient failure the poll
+                // auto-recovers from in ≤30s — but the user gets a manual Retry
+                // too, so the state is the designed *retryable* error, not a
+                // dead end.
+                Status::Unreachable => {
+                    Load::Failed("Your engine didn't answer. It may be stopped.".to_string())
+                }
+                // `Status::NotConnected` is handled above; `Status::Connected`
+                // falls here with the current orders.
+                _ => Load::Done(self.orders.clone()),
+            };
+            let state = load
+                .into_list_view("No orders yet. Trades show up here once a strategy places them.");
+            match state {
+                ViewState::Loading => render_skeleton(),
+                ViewState::Empty { hint } => render_empty(&hint),
+                ViewState::Error { message, retryable } => render_error(&message, retryable, cx),
+                ViewState::Ready(orders) => self.render_orders(&orders, cx),
+            }
         };
 
         v_flex()
