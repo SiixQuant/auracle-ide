@@ -215,7 +215,11 @@ impl AiProvidersPage {
     /// snapshot through [`engine_default_summary`]. Designs every state — loading
     /// skeleton, retryable error, and the honest summary — so the row is never
     /// blank.
-    fn render_engine_default(&self, rows: &[AiProviderRow], cx: &mut Context<Self>) -> AnyElement {
+    fn render_engine_default(
+        &self,
+        descriptors: &[ProviderDescriptor],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let load = self
             .settings_window
             .read_with(cx, |settings_window, _| {
@@ -259,7 +263,6 @@ impl AiProvidersPage {
             ViewState::Ready(settings) => {
                 let engine_default_ide_id =
                     auracle_connections::engine_provider_to_ide(&settings.ai_model.provider);
-                let descriptors = provider_descriptors(rows);
                 let summary: EngineDefaultStatus = engine_default_summary(
                     &descriptors,
                     engine_default_ide_id,
@@ -479,7 +482,7 @@ impl Render for AiProvidersPage {
         let descriptors = current_provider_descriptors(cx);
         let rows = derive_provider_rows(&descriptors, engine_default_ide_id.as_deref());
 
-        let engine_default = self.render_engine_default(&rows, cx);
+        let engine_default = self.render_engine_default(&descriptors, cx);
         let providers = self.render_provider_rows(&rows, cx);
 
         v_flex()
@@ -529,19 +532,6 @@ fn current_provider_descriptors(cx: &App) -> Vec<ProviderDescriptor> {
             id: provider.id().0.to_string(),
             display: provider.name().0.to_string(),
             authenticated: provider.is_authenticated(cx),
-        })
-        .collect()
-}
-
-/// Reconstruct descriptors from already-derived rows, used by the engine-default
-/// header so it reads the SAME provider list the rows below it show (the
-/// `auracle_ai_settings` invariant: header and list resolve through one list).
-fn provider_descriptors(rows: &[AiProviderRow]) -> Vec<ProviderDescriptor> {
-    rows.iter()
-        .map(|row| ProviderDescriptor {
-            id: row.id.clone(),
-            display: row.display.clone(),
-            authenticated: row.authenticated,
         })
         .collect()
 }
