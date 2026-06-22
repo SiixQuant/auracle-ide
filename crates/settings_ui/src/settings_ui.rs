@@ -897,6 +897,19 @@ pub struct SettingsWindow {
     pub(crate) account_profile: auracle_view_state::Load<auracle_connections::Profile>,
     /// Keeps the in-flight profile fetch alive; replaced on each (re)load.
     account_profile_task: Option<Task<()>>,
+    /// The engine's shared settings (designated default AI model + its key
+    /// state), read once over loopback from `/ui/api/settings` when the window
+    /// opens and re-read on the AI providers page's Retry. Backs the
+    /// "Model providers" sub-page's engine-default header; held as a [`Load`] so
+    /// the page maps it to its loading/error/ready states.
+    pub(crate) shared_settings: auracle_view_state::Load<auracle_connections::SharedSettings>,
+    /// Keeps the in-flight shared-settings fetch alive; replaced on each (re)load.
+    shared_settings_task: Option<Task<()>>,
+    /// The live "Model providers" sub-page entity. Holds the cached provider
+    /// configuration views; created lazily the first time the sub-page renders
+    /// and cleared when it is popped (the views can't be rebuilt per render
+    /// without dropping editor focus while a user types a key).
+    ai_providers_page: Option<Entity<pages::AiProvidersPage>>,
 }
 
 struct SearchDocument {
@@ -1525,6 +1538,10 @@ impl PartialEq for SettingItem {
 enum SubPageType {
     Language,
     SkillCreator,
+    /// The native "Model providers" sub-page on the AI page. Tagged so its
+    /// backing entity (which caches live provider configuration views) is built
+    /// when the page is pushed and dropped when it is popped.
+    AiProviders,
     #[default]
     Other,
 }
@@ -1875,12 +1892,16 @@ impl SettingsWindow {
             skill_creator_page: None,
             account_profile: auracle_view_state::Load::Pending,
             account_profile_task: None,
+            shared_settings: auracle_view_state::Load::Pending,
+            shared_settings_task: None,
+            ai_providers_page: None,
         };
 
         this.fetch_files(window, cx);
         this.build_ui(window, cx);
         this.build_search_index();
         this.load_account_profile(cx);
+        this.load_shared_settings(cx);
 
         this.search_bar.update(cx, |editor, cx| {
             editor.focus_handle(cx).focus(window, cx);
@@ -1903,6 +1924,30 @@ impl SettingsWindow {
             this.update(cx, |this, cx| {
                 this.account_profile = match result {
                     Ok(profile) => auracle_view_state::Load::Done(profile),
+                    Err(error) => auracle_view_state::Load::Failed(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// (Re)fetch the engine's shared settings (the designated default AI model
+    /// and whether the engine holds a usable key for it) over loopback, driving
+    /// the "Model providers" sub-page's [`auracle_view_state::Load`] state. Sets
+    /// `Pending` immediately so the page shows its skeleton, then resolves to
+    /// `Done`/`Failed`. Called once on open and again from the page's Retry.
+    pub(crate) fn load_shared_settings(&mut self, cx: &mut Context<Self>) {
+        self.shared_settings = auracle_view_state::Load::Pending;
+        cx.notify();
+        // Capture the http client outside `cx.spawn` so the async block borrows
+        // nothing from `cx` (mirrors `load_account_profile`).
+        let http_client = cx.http_client();
+        self.shared_settings_task = Some(cx.spawn(async move |this, cx| {
+            let result = auracle_connections::get_settings(http_client).await;
+            this.update(cx, |this, cx| {
+                this.shared_settings = match result {
+                    Ok(settings) => auracle_view_state::Load::Done(settings),
                     Err(error) => auracle_view_state::Load::Failed(error.to_string()),
                 };
                 cx.notify();
@@ -4035,10 +4080,21 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<SettingsWindow>,
     ) {
+        // Build the "Model providers" entity here (where `&mut self` is available)
+        // rather than during render: it caches live provider configuration views
+        // whose embedded editors would lose focus if rebuilt per render.
+        if sub_page_link.r#type == SubPageType::AiProviders && self.ai_providers_page.is_none() {
+            let weak = cx.weak_entity();
+            self.ai_providers_page = Some(pages::build_ai_providers_page(weak, window, cx));
+        }
         self.sub_page_stack
             .push(SubPage::new(sub_page_link, section_header));
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn ai_providers_page(&self) -> Option<Entity<pages::AiProvidersPage>> {
+        self.ai_providers_page.clone()
     }
 
     /// Push a dynamically-created sub-page with a custom render function.
@@ -4238,10 +4294,14 @@ impl SettingsWindow {
 
     fn pop_sub_page(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
         self.regex_validation_error = None;
-        if let Some(popped) = self.sub_page_stack.pop()
-            && popped.link.r#type == SubPageType::SkillCreator
-        {
-            self.skill_creator_page = None;
+        if let Some(popped) = self.sub_page_stack.pop() {
+            match popped.link.r#type {
+                SubPageType::SkillCreator => self.skill_creator_page = None,
+                // Drop the page entity (and its cached configuration views) so a
+                // fresh one — reflecting current auth state — is built next open.
+                SubPageType::AiProviders => self.ai_providers_page = None,
+                _ => {}
+            }
         }
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
         cx.notify();
@@ -5056,6 +5116,9 @@ pub mod test {
                 skill_creator_page: None,
                 account_profile: auracle_view_state::Load::Pending,
                 account_profile_task: None,
+                shared_settings: auracle_view_state::Load::Pending,
+                shared_settings_task: None,
+                ai_providers_page: None,
             }
         }
     }
@@ -5185,6 +5248,11 @@ pub mod test {
             last_copied_link_path: None,
             last_copied_skill_directory_path: None,
             skill_creator_page: None,
+            account_profile: auracle_view_state::Load::Pending,
+            account_profile_task: None,
+            shared_settings: auracle_view_state::Load::Pending,
+            shared_settings_task: None,
+            ai_providers_page: None,
         };
 
         settings_window.build_filter_table();

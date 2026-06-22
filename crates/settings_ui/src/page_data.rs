@@ -13,8 +13,9 @@ use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
     SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
     pages::{
-        open_audio_test_window, render_account_page, render_edit_prediction_setup_page,
-        render_skills_setup_page, render_tool_permissions_setup_page,
+        open_audio_test_window, render_account_page, render_ai_providers_page,
+        render_edit_prediction_setup_page, render_skills_setup_page,
+        render_tool_permissions_setup_page,
     },
 };
 
@@ -8309,10 +8310,32 @@ fn ai_page() -> SettingsPage {
         })]
     }
 
+    fn model_providers_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader("Model providers"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Model providers".into(),
+                // Tagged so `SettingsWindow` builds (and later drops) the backing
+                // entity that caches each provider's live configuration view.
+                r#type: crate::SubPageType::AiProviders,
+                json_path: None,
+                description: Some(
+                    "Configure AI model providers and choose the default model.".into(),
+                ),
+                // Keys are stored per provider (keychain or engine vault), not in
+                // settings.json, so there's nothing to "Edit in settings.json".
+                in_json: false,
+                files: USER,
+                render: render_ai_providers_page,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: "AI",
         items: concat_sections![
             general_section(),
+            model_providers_section(),
             agent_configuration_section(),
             context_servers_section(),
             edit_prediction_language_settings_section(),
