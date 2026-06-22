@@ -15,47 +15,41 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_status_view::{ChipTone, EngineFacts, chip_view};
 use futures::AsyncReadExt as _;
-use gpui::{App, Entity, EventEmitter, Hsla, SharedString, Task, WeakEntity, Window};
-use ui::prelude::*;
+use gpui::{App, Entity, EventEmitter, Task, WeakEntity, Window};
 use ui::Tooltip;
+use ui::prelude::*;
+use util::ResultExt as _;
 use workspace::{StatusItemView, Workspace, item::ItemHandle};
 
 const POLL_EVERY: Duration = Duration::from_secs(30);
 
-#[derive(Clone, PartialEq)]
-enum EngineState {
-    NotConnected,
-    Checking,
-    Connected {
-        broker: SharedString,
-        live_allowed: bool,
-        /// The engine's plain capability sentence for the active
-        /// broker (or the "no broker yet" line) — the honest answer
-        /// to "what can this do / can I go live?".
-        capability_plain: SharedString,
-    },
-    Unreachable,
-}
-
 pub struct AuracleStatus {
-    state: EngineState,
+    /// The already-parsed engine facts the chip decides over — the gpui-free
+    /// reducer (`chip_view`) owns the label/tone/tooltip text, so this view only
+    /// holds the facts and maps the reducer's tone to a theme colour.
+    state: EngineFacts,
     _poll: Task<()>,
 }
 
 impl AuracleStatus {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
-            this.state = EngineState::Checking;
+            this.state = EngineFacts::Checking;
             cx.notify();
         })
         .detach();
         let poll = Self::spawn_poll(cx);
         Self {
-            state: if auracle_connect::load_config().api_key.is_some() {
-                EngineState::Checking
+            state: if auracle_connect::load_config()
+                .api_key
+                .filter(|key| !key.trim().is_empty())
+                .is_some()
+            {
+                EngineFacts::Checking
             } else {
-                EngineState::NotConnected
+                EngineFacts::NotConnected
             },
             _poll: poll,
         }
@@ -81,15 +75,15 @@ impl AuracleStatus {
     }
 }
 
-async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
+async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineFacts {
     let config = auracle_connect::load_config();
     let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
-        return EngineState::NotConnected;
+        return EngineFacts::NotConnected;
     };
     let url = config
         .engine_url
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let attempt: Result<EngineState> = async {
+    let attempt: Result<EngineFacts> = async {
         let request = http_client::http::Request::builder()
             .uri(format!("{url}/ui/api/capabilities"))
             .header("Cookie", format!("auracle_session={key}"))
@@ -101,8 +95,13 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
         let value: serde_json::Value = serde_json::from_str(&body)?;
-        let active = value.get("active_broker").and_then(|v| v.as_str());
-        let broker = active.unwrap_or("none yet").to_string();
+        // An absent or empty active broker is None — never a broker literally
+        // named "none yet"; the reducer renders the honest "no broker yet" form.
+        let broker = value
+            .get("active_broker")
+            .and_then(|v| v.as_str())
+            .filter(|name| !name.is_empty())
+            .map(|name| name.to_string());
         let live_allowed = value
             .get("live_allowed")
             .and_then(|v| v.as_bool())
@@ -113,77 +112,38 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
             .get("brokers")
             .and_then(|v| v.as_array())
             .and_then(|arr| {
-                arr.iter().find(|b| {
-                    b.get("active").and_then(|a| a.as_bool()).unwrap_or(false)
-                })
+                arr.iter()
+                    .find(|b| b.get("active").and_then(|a| a.as_bool()).unwrap_or(false))
             })
             .and_then(|b| b.get("plain").and_then(|p| p.as_str()))
             .or_else(|| value.get("plain").and_then(|p| p.as_str()))
             .unwrap_or("")
             .to_string();
-        Ok(EngineState::Connected {
-            broker: SharedString::from(broker),
+        Ok(EngineFacts::Connected {
+            broker,
             live_allowed,
-            capability_plain: SharedString::from(capability_plain),
+            capability_plain,
         })
     }
     .await;
-    attempt.unwrap_or(EngineState::Unreachable)
+    // Never silently discard a real fetch failure: log it (the error carries no
+    // key — the secret only ever lived in the request Cookie header) and fall
+    // back to the honest Unreachable chip.
+    attempt.log_err().unwrap_or(EngineFacts::Unreachable)
 }
 
 impl EventEmitter<()> for AuracleStatus {}
 
 impl Render for AuracleStatus {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (dot, text, tip): (Hsla, SharedString, SharedString) = match &self.state {
-            EngineState::NotConnected => (
-                cx.theme().colors().text_muted,
-                "engine: not connected".into(),
-                "Your Auracle engine isn't connected yet. Click to connect."
-                    .into(),
-            ),
-            EngineState::Checking => (
-                cx.theme().status().warning,
-                "engine: checking…".into(),
-                "Asking your engine how it's doing — usually a moment.".into(),
-            ),
-            EngineState::Unreachable => (
-                cx.theme().status().error,
-                "engine: unreachable".into(),
-                "Your engine didn't answer. It may be stopped — start it, \
-                 or click to check the connection details."
-                    .into(),
-            ),
-            EngineState::Connected {
-                broker,
-                live_allowed,
-                capability_plain,
-            } => {
-                // Glance text answers "can I go live?" in one word;
-                // the tooltip carries the engine's full plain sentence.
-                let mode = if *live_allowed { "live ok" } else { "paper only" };
-                let license_note = if *live_allowed {
-                    "Real-money trading is allowed by your license — \
-                     paper stays the default."
-                } else {
-                    "Real-money trading is not yet enabled on your \
-                     license; paper trading works."
-                };
-                let tip = if capability_plain.is_empty() {
-                    license_note.to_string()
-                } else {
-                    format!("{capability_plain} {license_note}")
-                };
-                (
-                    cx.theme().status().success,
-                    // "on" (not "live") so the word never collides with
-                    // live trading — the mode token owns that meaning.
-                    SharedString::from(format!(
-                        "engine: on · broker: {broker} · {mode}"
-                    )),
-                    SharedString::from(tip),
-                )
-            }
+        // The whole chip — label, tone, and tooltip — is decided by the gpui-free
+        // reducer; this view only maps the reducer's tone to a theme colour.
+        let view = chip_view(self.state.clone());
+        let dot = match view.tone {
+            ChipTone::Good => cx.theme().status().success,
+            ChipTone::Bad => cx.theme().status().error,
+            ChipTone::Checking => cx.theme().status().warning,
+            ChipTone::Muted => cx.theme().colors().text_muted,
         };
 
         h_flex()
@@ -192,11 +152,11 @@ impl Render for AuracleStatus {
             .px_1()
             .child(div().size_1p5().rounded_full().bg(dot))
             .child(
-                Label::new(text)
+                Label::new(view.label)
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
-            .tooltip(Tooltip::text(tip))
+            .tooltip(Tooltip::text(view.tooltip))
             .on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(auracle_connect::Connect), cx);
             })

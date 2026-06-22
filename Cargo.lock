@@ -1501,6 +1501,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_runway"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_spec_compiler"
 version = "0.1.0"
 
@@ -1510,13 +1514,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_status_view",
  "futures 0.3.32",
  "gpui",
  "http_client",
  "serde_json",
  "ui",
+ "util",
  "workspace",
 ]
+
+[[package]]
+name = "auracle_status_view"
+version = "0.1.0"
 
 [[package]]
 name = "auracle_view_state"
@@ -15733,11 +15743,14 @@ dependencies = [
  "anyhow",
  "auracle_agent_commands",
  "auracle_connect",
+ "auracle_runway",
+ "auracle_view_state",
  "futures 0.3.32",
  "gpui",
  "http_client",
  "serde_json",
  "ui",
+ "util",
  "workspace",
 ]
 

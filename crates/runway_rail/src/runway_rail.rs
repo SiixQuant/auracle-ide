@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_runway::{StageTone, stage_marker};
+use auracle_view_state::Load;
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
@@ -20,6 +22,7 @@ use gpui::{
 };
 use ui::Tooltip;
 use ui::prelude::*;
+use util::ResultExt as _;
 use workspace::Workspace;
 use workspace::dock::{DockPosition, Panel, PanelEvent};
 
@@ -36,9 +39,17 @@ const POLL_EVERY: Duration = Duration::from_secs(60);
 const STAGES: [(&str, &str, &str); 6] = [
     ("research", "Research", "Look at markets, data, and ideas."),
     ("build", "Build", "Shape an idea into a strategy."),
-    ("validate", "Validate", "Test it against the past, honestly."),
+    (
+        "validate",
+        "Validate",
+        "Test it against the past, honestly.",
+    ),
     ("paper", "Paper", "Practice with pretend money."),
-    ("go_live", "Go live", "Real money — only after every gate is green."),
+    (
+        "go_live",
+        "Go live",
+        "Real money — only after every gate is green.",
+    ),
     ("monitor", "Monitor", "Watch everything that runs."),
 ];
 
@@ -63,10 +74,22 @@ struct RunwayTruth {
     current: Option<SharedString>,
 }
 
+/// The rail's own connection picture, distinct from the runway payload itself.
+/// The two top-level cases the engine truth can't express — no API key at all,
+/// and a poll still in flight before any answer — must read differently from a
+/// reachable engine's `Load`, so they live here rather than being collapsed into
+/// "no truth".
+enum RailState {
+    /// No API key is configured — the install hasn't been connected.
+    Disconnected,
+    /// A key is present and a runway fetch is in flight or has been attempted;
+    /// the inner `Load` is the honest loading / error / ready picture.
+    Linked(Load<RunwayTruth>),
+}
+
 pub struct RunwayRail {
     focus_handle: FocusHandle,
-    truth: Option<RunwayTruth>,
-    connected: bool,
+    state: RailState,
     _poll: Task<()>,
 }
 
@@ -77,22 +100,37 @@ impl RunwayRail {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.truth = None;
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    // A fresh connect attempt resets the rail to a first-poll
+                    // Checking state when a key is now present, so the rail
+                    // never strands on stale truth from a previous engine.
+                    this.state = Self::initial_state();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
-                    truth: None,
-                    connected: false,
+                    state: Self::initial_state(),
                     _poll: poll,
                 }
             })
         })
+    }
+
+    /// The rail's state before the first poll returns: Disconnected when there is
+    /// no key, otherwise Linked+Pending (Checking) so a key-present install never
+    /// shows the "not connected" CTA while the very first poll is still running.
+    fn initial_state() -> RailState {
+        if auracle_connect::load_config()
+            .api_key
+            .filter(|key| !key.trim().is_empty())
+            .is_some()
+        {
+            RailState::Linked(Load::Pending)
+        } else {
+            RailState::Disconnected
+        }
     }
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
@@ -102,15 +140,13 @@ impl RunwayRail {
                 let fetched = fetch_runway(http.clone()).await;
                 let ok = this
                     .update(cx, |this, cx| {
-                        match fetched {
-                            Some(truth) => {
-                                this.truth = Some(truth);
-                                this.connected = true;
-                            }
-                            None => {
-                                this.connected = false;
-                            }
-                        }
+                        this.state = match fetched {
+                            // No key — the install isn't connected.
+                            None => RailState::Disconnected,
+                            // A key is present; carry through the honest load
+                            // outcome (ready truth or a real fetch error).
+                            Some(load) => RailState::Linked(load),
+                        };
                         cx.notify();
                     })
                     .is_ok();
@@ -123,7 +159,11 @@ impl RunwayRail {
     }
 }
 
-async fn fetch_runway(http: Arc<dyn http_client::HttpClient>) -> Option<RunwayTruth> {
+/// Poll the engine's runway truth. `None` means there is no API key (the install
+/// isn't connected); `Some(Load::Done)` is a fresh truth; `Some(Load::Failed)` is
+/// a reachable-but-erroring engine — a state that must read distinctly from "not
+/// connected" rather than being silently collapsed to it.
+async fn fetch_runway(http: Arc<dyn http_client::HttpClient>) -> Option<Load<RunwayTruth>> {
     let config = auracle_connect::load_config();
     let key = config.api_key.filter(|k| !k.trim().is_empty())?;
     let url = config
@@ -174,7 +214,13 @@ async fn fetch_runway(http: Arc<dyn http_client::HttpClient>) -> Option<RunwayTr
         Ok(truth)
     }
     .await;
-    attempt.ok()
+    // Never silently discard a real fetch failure: log it (the error carries no
+    // key — the secret only ever lived in the request Cookie header), and surface
+    // a distinct, designed error state to the rail instead of "not connected".
+    Some(match attempt.log_err() {
+        Some(truth) => Load::Done(truth),
+        None => Load::Failed("Couldn't read your runway.".to_string()),
+    })
 }
 
 impl EventEmitter<PanelEvent> for RunwayRail {}
@@ -235,10 +281,28 @@ impl Panel for RunwayRail {
     }
 }
 
+/// Map a [`StageTone`] to the theme colour the rail renders a stage in. Only
+/// theme `Color::*` — never a colour literal — so the rail tracks the theme.
+/// Mirrors `account_setup::tone_color`.
+fn tone_color(tone: StageTone) -> Color {
+    match tone {
+        StageTone::Accent => Color::Accent,
+        StageTone::Positive => Color::Success,
+        StageTone::Muted => Color::Muted,
+        StageTone::Disabled => Color::Disabled,
+    }
+}
+
 impl Render for RunwayRail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let truth = self.truth.clone();
-        let connected = self.connected && truth.is_some();
+        // The runway truth is only present once a linked engine has answered; in
+        // every other top-level state (no key, first poll in flight, fetch error)
+        // there is no truth and the stages render Locked.
+        let truth: Option<RunwayTruth> = match &self.state {
+            RailState::Linked(Load::Done(truth)) => Some(truth.clone()),
+            _ => None,
+        };
+        let has_truth = truth.is_some();
 
         v_flex()
             .key_context("RunwayRail")
@@ -278,7 +342,6 @@ impl Render for RunwayRail {
                     .and_then(|t| t.stages.get(*key))
                     .cloned()
                     .unwrap_or_default();
-                let reached = stage.reached.as_ref() == "yes";
                 let is_current = truth
                     .as_ref()
                     .and_then(|t| t.current.as_ref())
@@ -289,7 +352,7 @@ impl Render for RunwayRail {
                     // honestly-unproven stages (it carries the "not
                     // tracked yet" wording).
                     stage.evidence.clone()
-                } else if connected {
+                } else if has_truth {
                     format!("{hint} Nothing here yet.").into()
                 } else {
                     format!(
@@ -298,30 +361,16 @@ impl Render for RunwayRail {
                     )
                     .into()
                 };
-                let (icon, icon_color, label_color) = if reached {
-                    (
-                        IconName::Check,
-                        Color::Success,
-                        if is_current {
-                            Color::Accent
-                        } else {
-                            Color::Default
-                        },
-                    )
+                // The entire per-stage glance — icon, tones, and the one-word
+                // marker — is decided by the gpui-free reducer, so the render
+                // only maps its tones to theme colours. The marker is honest
+                // vocabulary only ("now" | "not tracked" | "to do"), never the
+                // banned "soon".
+                let marker = stage_marker(stage.reached.as_ref(), is_current, has_truth);
+                let icon = if marker.reached_icon {
+                    IconName::Check
                 } else {
-                    (IconName::LockOutlined, Color::Disabled, Color::Disabled)
-                };
-                // A one-word glance marker so lock states read without a
-                // hover: the current rung, a not-tracked-yet stage, and
-                // a not-done-yet stage are each distinct — none "broken".
-                let (marker, marker_color): (Option<&str>, Color) = if is_current {
-                    (Some("now"), Color::Accent)
-                } else if reached {
-                    (None, Color::Muted)
-                } else if stage.reached.as_ref() == "unknown" {
-                    (Some("soon"), Color::Muted)
-                } else {
-                    (Some("to do"), Color::Muted)
+                    IconName::LockOutlined
                 };
                 // Informational rows — no background hover highlight (a
                 // stage isn't a button yet; its document doesn't exist).
@@ -335,57 +384,90 @@ impl Render for RunwayRail {
                     .child(
                         Icon::new(icon)
                             .size(IconSize::XSmall)
-                            .color(icon_color),
+                            .color(tone_color(marker.mark_tone)),
                     )
-                    .child(Label::new(*name).color(label_color))
+                    .child(Label::new(*name).color(tone_color(marker.name_tone)))
                     .child(div().flex_1())
-                    .when_some(marker, |row, m| {
+                    .when_some(marker.label, |row, label| {
                         row.child(
-                            Label::new(m)
+                            Label::new(label)
                                 .size(LabelSize::XSmall)
-                                .color(marker_color),
+                                .color(tone_color(marker.mark_tone)),
                         )
                     })
                     .tooltip(Tooltip::text(tooltip_text))
             }))
             .child(div().flex_1())
-            .when(connected, |rail| {
-                rail.child(
-                    div().px_1().pb_1().child(
-                        Label::new("Live from your engine.")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    ),
+            .child(self.render_footer())
+    }
+}
+
+impl RunwayRail {
+    /// The rail footer, one designed state per top-level case: a live note when
+    /// the engine answered, a muted "checking" line while the first poll is in
+    /// flight (never the Connect CTA — that would read as a false negative), an
+    /// honest error with a retry affordance when a reachable engine erred, and
+    /// the Connect CTA only when there genuinely is no key.
+    fn render_footer(&self) -> AnyElement {
+        match &self.state {
+            RailState::Linked(Load::Done(_)) => div()
+                .px_1()
+                .pb_1()
+                .child(
+                    Label::new("Live from your engine.")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
                 )
-            })
-            .when(!connected, |rail| {
+                .into_any_element(),
+            RailState::Linked(Load::Pending) => div()
+                .px_1()
+                .pb_1()
+                .child(
+                    Label::new("Checking your engine…")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
+                .into_any_element(),
+            RailState::Linked(Load::Failed(message)) => v_flex()
+                .px_1()
+                .pb_1()
+                .gap_1()
+                .child(
+                    Label::new(message.clone())
+                        .size(LabelSize::XSmall)
+                        .color(Color::Error),
+                )
+                .child(
+                    Button::new("runway-retry-connect", "Connect…")
+                        .style(ButtonStyle::Filled)
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
+                        }),
+                )
+                .into_any_element(),
+            RailState::Disconnected => v_flex()
                 // Not connected: give the user the same forward action
                 // every other panel offers, so the locked rail never
                 // strands a first-time user (council B-14).
-                rail.child(
-                    v_flex()
-                        .px_1()
-                        .pb_1()
-                        .gap_1()
-                        .child(
-                            Label::new(
-                                "This rail lights up once it can reach \
-                                 your Auracle engine.",
-                            )
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                        )
-                        .child(
-                            Button::new("runway-connect", "Connect…")
-                                .style(ButtonStyle::Filled)
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(auracle_connect::Connect),
-                                        cx,
-                                    );
-                                }),
-                        ),
+                .px_1()
+                .pb_1()
+                .gap_1()
+                .child(
+                    Label::new(
+                        "This rail lights up once it can reach \
+                         your Auracle engine.",
+                    )
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
                 )
-            })
+                .child(
+                    Button::new("runway-connect", "Connect…")
+                        .style(ButtonStyle::Filled)
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
+                        }),
+                )
+                .into_any_element(),
+        }
     }
 }
