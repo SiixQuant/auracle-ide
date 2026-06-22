@@ -9,31 +9,29 @@
 //! The cockpit mirrors `BasedPyrightBanner` (a `ToolbarItemView` that self-hides
 //! based on the active item being a `.py` editor) and the `BrokerWizard`'s
 //! `cx.spawn` + `WeakEntity::update(..).ok()` async-update idiom.
+//!
+//! All decision logic — which verbs are enabled, how the feed status reads, how
+//! a `/backtest` response becomes a one-line status — lives in the gpui-free
+//! `auracle_cockpit_state` / `auracle_studio_results` reducer crates, so this
+//! file is purely the render + async-I/O shell. Keeping the decisions pure is
+//! what lets them be unit-tested without a graphics toolchain and keeps the
+//! cockpit and the results tab formatting the same engine payload identically.
 
 use std::path::PathBuf;
 
-use auracle_backtest_results::{BacktestSummary, open_backtest_results};
+use auracle_backtest_results::open_backtest_results;
+use auracle_cockpit_state::{
+    ActionAffordance, FeedState, ResolveState, backtest_affordance, deploy_affordance,
+    feed_from_preflight, match_strategy, show_unreachable_banner, strategy_module_from_path,
+    validate_affordance,
+};
 use auracle_connections::{get_json, post_json};
 use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
+use auracle_studio_results::{BacktestSummary, backtest_oneline};
 use editor::Editor;
 use gpui::{Context, EventEmitter, Task, WeakEntity};
-use ui::{Tooltip, prelude::*};
+use ui::{Banner, Indicator, Severity, TintColor, Tooltip, prelude::*};
 use workspace::{ItemHandle, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace};
-
-/// The outcome of resolving the active `.py` against the engine's listing.
-/// Distinguishing these is what lets the cockpit be honest: "can't reach the
-/// engine" and "this file isn't a strategy" are different problems.
-#[derive(Clone, Debug, PartialEq)]
-enum ResolveState {
-    /// Resolve in flight.
-    Resolving,
-    /// Matched a dotted engine strategy path (`strategies.module.Class`).
-    Strategy(String),
-    /// Engine reachable, but no strategy matches this file.
-    NotAStrategy,
-    /// The engine could not be reached.
-    EngineUnreachable,
-}
 
 /// Whether the cockpit is showing, and for which strategy.
 enum CockpitVisibility {
@@ -53,17 +51,6 @@ enum ActionState {
     Running,
     Ok(SharedString),
     Error(SharedString),
-}
-
-/// The per-strategy data-feed status. `Stale` is intentionally never produced:
-/// the engine exposes per-strategy data *presence* (via the deploy preflight's
-/// `data` block) but not per-symbol freshness, so the cockpit reports Ok /
-/// Missing honestly and leaves staleness to the dedicated docks.
-#[derive(Clone, Copy, PartialEq)]
-enum FeedState {
-    Unknown,
-    Ok,
-    Missing,
 }
 
 pub struct StrategyCockpit {
@@ -102,7 +89,9 @@ impl StrategyCockpit {
             deploy: ActionState::Idle,
             deploy_live_allowed: false,
             awaiting_live_confirm: false,
-            feed: FeedState::Unknown,
+            // No poll has run yet: the feed is checking, not "unknown" (which is
+            // reserved for the engine genuinely returning no data block).
+            feed: FeedState::Polling,
             _context_task: None,
             _action_task: None,
         }
@@ -115,6 +104,15 @@ impl StrategyCockpit {
                 ..
             } => Some(path.as_str()),
             _ => None,
+        }
+    }
+
+    fn resolve_state(&self) -> ResolveState {
+        match &self.visibility {
+            CockpitVisibility::Shown { resolve, .. } => resolve.clone(),
+            // Hidden never renders, but a sensible default keeps the affordance
+            // calls total.
+            CockpitVisibility::Hidden => ResolveState::Resolving,
         }
     }
 
@@ -135,16 +133,22 @@ impl StrategyCockpit {
         };
 
         self.visibility = CockpitVisibility::Shown {
-            file_path,
+            file_path: file_path.clone(),
             resolve: ResolveState::Resolving,
         };
-        self.feed = FeedState::Unknown;
+        // A poll is in flight: the feed pill reads "Checking data…", not a
+        // settled answer.
+        self.feed = FeedState::Polling;
         // A pending live-deploy confirmation must not carry across a context
         // change (different strategy/file).
         self.awaiting_live_confirm = false;
         cx.notify();
 
         let http = cx.http_client();
+        // Capture the path this poll resolved for so a fast tab-switch can't
+        // paint strategy A's feed / live-allowed onto strategy B: when the
+        // result lands we apply it only if the cockpit still shows this path.
+        let resolved_for = file_path;
         self._context_task = Some(cx.spawn(async move |this, cx| {
             let resolution = resolve_strategy_path(http.clone(), &module).await;
 
@@ -157,6 +161,16 @@ impl StrategyCockpit {
             };
 
             this.update(cx, |this, cx| {
+                // Guard against a stale poll: if the user switched buffers while
+                // this was in flight, `visibility` now points at a different
+                // file and applying these values would be a lie about it.
+                let still_current = matches!(
+                    &this.visibility,
+                    CockpitVisibility::Shown { file_path, .. } if *file_path == resolved_for
+                );
+                if !still_current {
+                    return;
+                }
                 if let CockpitVisibility::Shown { resolve, .. } = &mut this.visibility {
                     *resolve = resolution;
                 }
@@ -190,7 +204,9 @@ impl StrategyCockpit {
             let summary = this
                 .update(cx, |this, cx| match &result {
                     Ok(value) => {
-                        this.backtest = ActionState::Ok(backtest_summary(value));
+                        // One-liner is formatted by the shared reducer so the
+                        // cockpit status and the results tab never disagree.
+                        this.backtest = ActionState::Ok(backtest_oneline(value).into());
                         let summary = BacktestSummary::from_engine(title, value);
                         cx.notify();
                         Some(summary)
@@ -284,34 +300,43 @@ impl StrategyCockpit {
         }));
     }
 
+    /// One renderer for all three verbs. The affordance (label / enabled /
+    /// danger / tooltip) is computed by the reducer, so the deploy button — with
+    /// its danger styling and live-confirm tooltip — rides the exact same path
+    /// as Backtest and Validate. There is no second hand-rolled button body to
+    /// drift from this one.
     fn render_action_button(
         &self,
         id: &'static str,
-        label: &'static str,
+        affordance: ActionAffordance,
         state: &ActionState,
-        enabled: bool,
-        disabled_tooltip: Option<&'static str>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let running = matches!(state, ActionState::Running);
+        let clickable = affordance.enabled && !running;
         let button_label: SharedString = if running {
-            format!("{label}…").into()
+            format!("{}…", affordance.label).into()
         } else {
-            label.into()
+            affordance.label.clone().into()
         };
 
-        let button = Button::new(id, button_label)
+        let mut button = Button::new(id, button_label)
             .label_size(LabelSize::Small)
-            .disabled(!enabled || running)
-            .when(enabled && !running, |this| {
+            .disabled(!affordance.enabled || running)
+            .when(clickable, |this| {
                 this.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
             });
 
-        let button = match disabled_tooltip {
-            Some(text) if !enabled => button.tooltip(Tooltip::text(text)),
-            _ => button,
-        };
+        // The only danger style is the live-deploy confirm step: a real-money
+        // action must read as dangerous, never as just another button.
+        if affordance.danger {
+            button = button.style(ButtonStyle::Tinted(TintColor::Error));
+        }
+
+        if let Some(tooltip) = affordance.tooltip {
+            button = button.tooltip(Tooltip::text(tooltip));
+        }
 
         h_flex()
             .gap_1()
@@ -324,99 +349,57 @@ impl EventEmitter<ToolbarItemEvent> for StrategyCockpit {}
 
 impl Render for StrategyCockpit {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let resolved = matches!(
-            self.visibility,
-            CockpitVisibility::Shown {
-                resolve: ResolveState::Strategy(_),
-                ..
-            }
-        );
-
+        let resolve = self.resolve_state();
         let backtest = self.backtest.clone();
         let validate = self.validate.clone();
         let deploy = self.deploy.clone();
-        let deploy_label = if self.awaiting_live_confirm {
-            "Confirm live deploy"
-        } else if self.deploy_live_allowed {
-            "Deploy"
-        } else {
-            "Deploy (paper)"
-        };
 
-        let unresolved_tooltip = match &self.visibility {
-            CockpitVisibility::Shown {
-                resolve: ResolveState::EngineUnreachable,
-                ..
-            } => "Can't reach the engine — check your connection in Settings.",
-            CockpitVisibility::Shown {
-                resolve: ResolveState::Resolving,
-                ..
-            } => "Resolving this file against the engine…",
-            _ => "No engine strategy matches this file. Add a Strategy subclass under the strategies path.",
-        };
+        // Compute every verb's affordance once from the resolve state, so the
+        // three buttons stay in lockstep.
+        let backtest_affordance = backtest_affordance(&resolve);
+        let validate_affordance = validate_affordance(&resolve);
+        let deploy_affordance = deploy_affordance(
+            &resolve,
+            self.deploy_live_allowed,
+            self.awaiting_live_confirm,
+        );
 
-        h_flex()
+        let buttons = h_flex()
             .id("strategy-cockpit")
             .gap_2()
             .px_1()
-            .child(
-                self.render_action_button(
-                    "cockpit-backtest",
-                    "Backtest",
-                    &backtest,
-                    resolved,
-                    Some(unresolved_tooltip),
-                    Self::run_backtest,
-                    cx,
-                ),
-            )
-            .child(
-                self.render_action_button(
-                    "cockpit-validate",
-                    "Validate",
-                    &validate,
-                    resolved,
-                    Some(unresolved_tooltip),
-                    Self::run_validate,
-                    cx,
-                ),
-            )
-            .child({
-                let label = deploy_label;
-                let running = matches!(deploy, ActionState::Running);
-                let button_label: SharedString = if running {
-                    format!("{label}…").into()
-                } else {
-                    label.into()
-                };
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("cockpit-deploy", button_label)
-                            .label_size(LabelSize::Small)
-                            .disabled(!resolved || running)
-                            .when(resolved && !running, |this| {
-                                this.on_click(
-                                    cx.listener(|this, _, _, cx| this.run_deploy(cx)),
-                                )
-                            })
-                            .when(!resolved, |this| {
-                                this.tooltip(Tooltip::text(unresolved_tooltip))
-                            })
-                            .when(resolved && !self.deploy_live_allowed && !self.awaiting_live_confirm, |this| {
-                                this.tooltip(Tooltip::text(
-                                    "Live trading is not allowed for the active broker; this deploys to paper.",
-                                ))
-                            })
-                            .when(self.awaiting_live_confirm, |this| {
-                                this.tooltip(Tooltip::text(
-                                    "Sends a LIVE, real-money deploy — click again to confirm.",
-                                ))
-                            }),
-                    )
-                    .children(render_action_status(&deploy))
+            .child(self.render_action_button(
+                "cockpit-backtest",
+                backtest_affordance,
+                &backtest,
+                Self::run_backtest,
+                cx,
+            ))
+            .child(self.render_action_button(
+                "cockpit-validate",
+                validate_affordance,
+                &validate,
+                Self::run_validate,
+                cx,
+            ))
+            .child(self.render_action_button(
+                "cockpit-deploy",
+                deploy_affordance,
+                &deploy,
+                |this, _window, cx| this.run_deploy(cx),
+                cx,
+            ))
+            .child(render_feed_pill(self.feed));
+
+        // Engine-unreachable is a first-class error state, not just a disabled
+        // tooltip: surface it as a Banner with a Retry that re-resolves the same
+        // file. The disabled verbs render beneath it.
+        v_flex()
+            .gap_1()
+            .when(show_unreachable_banner(&resolve), |this| {
+                this.child(render_unreachable_banner(cx, &self.visibility))
             })
-            .child(render_feed_pill(self.feed))
+            .child(buttons)
     }
 }
 
@@ -480,29 +463,50 @@ fn render_action_status(state: &ActionState) -> Option<impl IntoElement> {
     }
 }
 
+/// The per-strategy data-feed pill. The dot color + copy distinguish the four
+/// poll states: a "Checking data…" skeleton while in flight, settled Ok /
+/// Missing answers, and a muted Unknown only when the engine returned no data
+/// block at all — never a single neutral label that conflates all four.
 fn render_feed_pill(feed: FeedState) -> impl IntoElement {
     let (text, color) = match feed {
-        FeedState::Unknown => ("Data: unknown", Color::Muted),
+        FeedState::Polling => ("Checking data…", Color::Muted),
         FeedState::Ok => ("Data: ok", Color::Success),
         FeedState::Missing => ("Data: missing", Color::Warning),
+        FeedState::Unknown => ("Data: unknown", Color::Muted),
     };
-    h_flex().child(Label::new(text).size(LabelSize::Small).color(color))
+    h_flex()
+        .gap_1()
+        .child(Indicator::dot().color(color))
+        .child(Label::new(text).size(LabelSize::Small).color(color))
 }
 
-/// Derive the dotted Python module of a strategy file relative to a
-/// `strategies/` root, e.g. `/opt/auracle/strategies/example_ma.py` ->
-/// `strategies.example_ma`. Returns `None` when the file is not under a
-/// `strategies/` directory.
-fn strategy_module_from_path(file_path: &std::path::Path) -> Option<String> {
-    let components: Vec<String> = file_path
-        .components()
-        .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
-        .collect();
-    let strategies_index = components.iter().rposition(|part| part == "strategies")?;
-    let mut module_parts: Vec<String> = components[strategies_index..].to_vec();
-    let last = module_parts.last_mut()?;
-    *last = last.strip_suffix(".py")?.to_owned();
-    Some(module_parts.join("."))
+/// The engine-unreachable banner: a warning strip with a Retry that re-resolves
+/// the file the cockpit is currently showing. Distinct from the "not a strategy"
+/// case (a disabled tooltip), because the cure is different — retry vs. add a
+/// Strategy subclass.
+fn render_unreachable_banner(
+    cx: &mut Context<StrategyCockpit>,
+    visibility: &CockpitVisibility,
+) -> impl IntoElement {
+    let file_path = match visibility {
+        CockpitVisibility::Shown { file_path, .. } => Some(file_path.clone()),
+        CockpitVisibility::Hidden => None,
+    };
+    Banner::new()
+        .severity(Severity::Warning)
+        .child(
+            Label::new("Can't reach the engine — check your connection in Settings.")
+                .size(LabelSize::Small),
+        )
+        .action_slot(
+            Button::new("cockpit-retry", "Retry")
+                .label_size(LabelSize::Small)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(file_path) = file_path.clone() {
+                        this.refresh_context(file_path, cx);
+                    }
+                })),
+        )
 }
 
 /// Match the derived module against the engine's strategy listing. Returns
@@ -518,28 +522,10 @@ async fn resolve_strategy_path(
     }
 }
 
-/// Pure matcher over the engine's strategy listing (engine reachable). Yields
-/// `Strategy` on a match, `NotAStrategy` otherwise.
-fn match_strategy(value: &serde_json::Value, module: &str) -> ResolveState {
-    let module_prefix = format!("{module}.");
-    let matched = value
-        .get("strategies")
-        .and_then(|strategies| strategies.as_array())
-        .and_then(|strategies| {
-            strategies
-                .iter()
-                .filter_map(|item| item.get("path").and_then(|path| path.as_str()))
-                .find(|path| path.starts_with(&module_prefix) || *path == module)
-                .map(str::to_owned)
-        });
-    match matched {
-        Some(path) => ResolveState::Strategy(path),
-        None => ResolveState::NotAStrategy,
-    }
-}
-
 /// Report per-strategy data-feed presence from the deploy preflight's `data`
-/// block (`universe` + `missing`). Presence only; freshness is out of scope.
+/// block (`universe` + `missing`) via the shared pure classifier. Presence
+/// only; freshness is out of scope. A transport error reads as `Unknown` (we
+/// learned nothing), never a fabricated Ok/Missing.
 async fn poll_feed(
     http: std::sync::Arc<dyn http_client::HttpClient>,
     strategy_path: &str,
@@ -549,41 +535,9 @@ async fn poll_feed(
         url_encode(strategy_path)
     );
     match get_json(http, &path).await {
-        Ok(value) => match value.get("data") {
-            Some(data) => {
-                let missing = data
-                    .get("missing")
-                    .and_then(|m| m.as_array())
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                if missing == 0 {
-                    FeedState::Ok
-                } else {
-                    FeedState::Missing
-                }
-            }
-            None => FeedState::Unknown,
-        },
+        Ok(value) => feed_from_preflight(&value),
         Err(_) => FeedState::Unknown,
     }
-}
-
-fn backtest_summary(value: &serde_json::Value) -> SharedString {
-    if let Some(stats) = value.get("stats") {
-        let total = stats
-            .get("total_return")
-            .and_then(|v| v.as_f64())
-            .map(|v| format!("return {:.1}%", v * 100.0));
-        let sharpe = stats
-            .get("sharpe")
-            .and_then(|v| v.as_f64())
-            .map(|v| format!("sharpe {v:.2}"));
-        let parts: Vec<String> = [total, sharpe].into_iter().flatten().collect();
-        if !parts.is_empty() {
-            return format!("Backtest done — {}", parts.join(", ")).into();
-        }
-    }
-    "Backtest done.".into()
 }
 
 fn validation_summary(value: &serde_json::Value) -> SharedString {
@@ -641,52 +595,6 @@ fn url_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn match_strategy_distinguishes_match_from_no_match() {
-        let listing = serde_json::json!({
-            "strategies": [{ "path": "strategies.gap.OvernightGapReversion" }]
-        });
-        assert_eq!(
-            match_strategy(&listing, "strategies.gap"),
-            ResolveState::Strategy("strategies.gap.OvernightGapReversion".to_string())
-        );
-        assert_eq!(
-            match_strategy(&listing, "strategies.other"),
-            ResolveState::NotAStrategy
-        );
-        // A reachable engine with an unexpected shape is "not a strategy",
-        // never confused with unreachable (which is the transport-error path).
-        assert_eq!(
-            match_strategy(&serde_json::json!({}), "strategies.gap"),
-            ResolveState::NotAStrategy
-        );
-    }
-
-    #[test]
-    fn derives_module_from_strategies_path() {
-        assert_eq!(
-            strategy_module_from_path(Path::new("/opt/auracle/strategies/example_ma.py")),
-            Some("strategies.example_ma".to_string())
-        );
-        assert_eq!(
-            strategy_module_from_path(Path::new("/home/me/proj/strategies/sub/momentum.py")),
-            Some("strategies.sub.momentum".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_non_strategy_paths() {
-        assert_eq!(
-            strategy_module_from_path(Path::new("/home/me/notes/scratch.py")),
-            None
-        );
-        assert_eq!(
-            strategy_module_from_path(Path::new("/opt/auracle/strategies/readme.txt")),
-            None
-        );
-    }
 
     #[test]
     fn encodes_strategy_path_query() {

@@ -1406,6 +1406,7 @@ version = "0.1.0"
 dependencies = [
  "auracle_connections",
  "auracle_deploy_gate",
+ "auracle_studio_results",
  "gpui",
  "runs_dock",
  "serde_json",
@@ -1419,14 +1420,23 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_backtest_results",
+ "auracle_cockpit_state",
  "auracle_connections",
  "auracle_deploy_gate",
+ "auracle_studio_results",
  "editor",
  "gpui",
  "http_client",
  "serde_json",
  "ui",
  "workspace",
+]
+
+[[package]]
+name = "auracle_cockpit_state"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1527,6 +1537,11 @@ dependencies = [
 [[package]]
 name = "auracle_status_view"
 version = "0.1.0"
+name = "auracle_studio_results"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "auracle_view_state"

@@ -6,139 +6,41 @@
 //! until then this view degrades honestly to the in-sample stats the existing
 //! `/backtest` route returns — it never fabricates a number the engine didn't
 //! send (missing stats render as an em dash).
+//!
+//! Parsing, formatting, and the robustness verdict all live in the gpui-free
+//! `auracle_studio_results` reducer crate, shared with the cockpit toolbar so
+//! the same engine payload reads identically on both surfaces. This file is the
+//! render + async-I/O shell over those pure decisions.
 
 use auracle_connections::post_json;
 use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
+use auracle_studio_results::{
+    DiagFetchOutcome, StudioDiagnostics, classify_diag_fetch, fmt_count, fmt_money, fmt_pct,
+    fmt_ratio, fmt_turns, robustness_verdict, verdict_text,
+};
 use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, Render, Task, Window};
-use ui::prelude::*;
+use ui::{Banner, Callout, Severity, TintColor, prelude::*};
 use workspace::{Workspace, item::Item};
 
-/// The numbers shown in the results tab's stat strip. Every field is optional so
-/// the view renders exactly what the engine returned — no fabricated stats.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct BacktestSummary {
-    pub strategy: SharedString,
-    pub net_profit: Option<f64>,
-    pub total_return: Option<f64>,
-    pub sharpe: Option<f64>,
-    pub max_drawdown: Option<f64>,
-    pub win_rate: Option<f64>,
-    pub turnover: Option<f64>,
-    pub num_trades: Option<u64>,
-}
+/// The numbers shown in the results tab's stat strip. Re-exported from the
+/// reducer crate so the cockpit (which builds the summary) and this tab (which
+/// renders it) share one type and one parser, and the `open_backtest_results`
+/// handoff stays type-compatible across the crate boundary.
+pub use auracle_studio_results::BacktestSummary;
 
-impl BacktestSummary {
-    /// Parse the engine `/backtest` response (`{ "stats": { … } }`) into a
-    /// summary. Missing fields stay `None`.
-    pub fn from_engine(strategy: impl Into<SharedString>, value: &serde_json::Value) -> Self {
-        let stats = value.get("stats");
-        let number = |key: &str| stats.and_then(|s| s.get(key)).and_then(|v| v.as_f64());
-        let integer = |key: &str| stats.and_then(|s| s.get(key)).and_then(|v| v.as_u64());
-        Self {
-            strategy: strategy.into(),
-            net_profit: number("net_profit"),
-            total_return: number("total_return"),
-            sharpe: number("sharpe"),
-            max_drawdown: number("max_drawdown"),
-            win_rate: number("win_rate"),
-            turnover: number("turnover"),
-            num_trades: integer("num_trades"),
-        }
-    }
-}
-
-/// Out-of-sample diagnostics from the engine's `/backtest/studio` route. Absent
-/// until that (owner-deployed) route exists, so the tab degrades honestly rather
-/// than inventing robustness it can't compute.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct StudioDiagnostics {
-    pub in_sample_sharpe: Option<f64>,
-    pub out_of_sample_sharpe: Option<f64>,
-    pub robustness: Option<f64>,
-    pub sensitivity: SharedString,
-}
-
-impl StudioDiagnostics {
-    pub fn from_engine(value: &serde_json::Value) -> Self {
-        let sharpe = |block: &str| {
-            value
-                .get(block)
-                .and_then(|s| s.get("sharpe"))
-                .and_then(|v| v.as_f64())
-        };
-        Self {
-            in_sample_sharpe: sharpe("in_sample"),
-            out_of_sample_sharpe: sharpe("out_of_sample"),
-            robustness: value.get("robustness").and_then(|v| v.as_f64()),
-            sensitivity: value
-                .get("sensitivity")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string()
-                .into(),
-        }
-    }
-
-    /// Plain-English verdict — honest about out-of-sample decay. The AI never
-    /// celebrates an in-sample number that doesn't survive out-of-sample.
-    fn verdict(&self) -> SharedString {
-        match (self.in_sample_sharpe, self.out_of_sample_sharpe) {
-            (Some(_), Some(oos)) if oos < 0.0 => {
-                "The edge does not survive out-of-sample — I would not deploy this.".into()
-            }
-            (Some(is), Some(oos)) if oos < is * 0.5 => {
-                "The edge weakens sharply out-of-sample — treat it with caution.".into()
-            }
-            (Some(_), Some(_)) => "The edge holds out-of-sample.".into(),
-            _ => "Out-of-sample diagnostics unavailable.".into(),
-        }
-    }
-}
-
-/// Whether the out-of-sample diagnostics have loaded.
+/// Whether the out-of-sample diagnostics have loaded. `Failed` is distinct from
+/// `Unavailable`: a transient engine error is retryable (it offers a Retry),
+/// while a route-absent `Unavailable` is an honest "not deployed yet" with no
+/// retry, because retrying a missing route can't help.
 #[derive(Clone, Default)]
 enum DiagState {
     #[default]
     Loading,
     Ready(StudioDiagnostics),
+    /// The diagnostics route isn't deployed (404) — non-retryable.
     Unavailable,
-}
-
-const MISSING: &str = "—";
-
-fn pct(value: Option<f64>) -> SharedString {
-    match value {
-        Some(v) => format!("{:+.1}%", v * 100.0).into(),
-        None => MISSING.into(),
-    }
-}
-
-fn ratio(value: Option<f64>) -> SharedString {
-    match value {
-        Some(v) => format!("{v:.2}").into(),
-        None => MISSING.into(),
-    }
-}
-
-fn money(value: Option<f64>) -> SharedString {
-    match value {
-        Some(v) => format!("{}${:.0}", if v < 0.0 { "-" } else { "+" }, v.abs()).into(),
-        None => MISSING.into(),
-    }
-}
-
-fn turns(value: Option<f64>) -> SharedString {
-    match value {
-        Some(v) => format!("{v:.1}×").into(),
-        None => MISSING.into(),
-    }
-}
-
-fn count(value: Option<u64>) -> SharedString {
-    match value {
-        Some(v) => v.to_string().into(),
-        None => MISSING.into(),
-    }
+    /// A transient server / transport error — retryable.
+    Failed(SharedString),
 }
 
 /// A single stat strip cell: a large value over a muted label.
@@ -188,13 +90,21 @@ impl BacktestResultsView {
         view
     }
 
-    /// Fetch out-of-sample diagnostics from the engine. Fails to `Unavailable`
-    /// (honest) when the route isn't deployed or the strategy is unknown.
+    /// Fetch out-of-sample diagnostics from the engine. The fetch outcome is
+    /// classified by the shared reducer so a 404 (route not deployed) reads as
+    /// the honest, non-retryable `Unavailable`, while a 5xx / transport error
+    /// reads as a retryable `Failed`. The transport collapses the response to
+    /// `Result<Value, _>` with no separate HTTP status, so we pass `None` for
+    /// the status and let the classifier sniff the error body — the documented
+    /// fallback.
     fn fetch_diagnostics(&mut self, cx: &mut Context<Self>) {
         let Some(strategy_path) = self.strategy_path() else {
             self.diagnostics = DiagState::Unavailable;
             return;
         };
+        // A retry from a failed/loaded state should visibly return to loading.
+        self.diagnostics = DiagState::Loading;
+        cx.notify();
         let http = cx.http_client();
         self._diagnostics_task = Some(cx.spawn(async move |this, cx| {
             let result = post_json(
@@ -206,7 +116,23 @@ impl BacktestResultsView {
             this.update(cx, |this, cx| {
                 this.diagnostics = match result {
                     Ok(value) => DiagState::Ready(StudioDiagnostics::from_engine(&value)),
-                    Err(_) => DiagState::Unavailable,
+                    Err(error) => {
+                        // No HTTP status is surfaced by the transport, so rely on
+                        // the body-sniff fallback: a route-absent body is the
+                        // only thing treated as Unavailable; everything else is
+                        // retryable. With status `None` the classifier only ever
+                        // yields Unavailable or Failed — success comes through the
+                        // Ok arm above — so a Ready classification here would be a
+                        // contradiction we surface honestly as a failure.
+                        let message = error.to_string();
+                        match classify_diag_fetch(None, Some(&message)) {
+                            DiagFetchOutcome::Unavailable => DiagState::Unavailable,
+                            DiagFetchOutcome::Failed { message } => {
+                                DiagState::Failed(message.into())
+                            }
+                            DiagFetchOutcome::Ready => DiagState::Failed(message.into()),
+                        }
+                    }
                 };
                 cx.notify();
             })
@@ -218,7 +144,7 @@ impl BacktestResultsView {
         if self.summary.strategy.is_empty() {
             "Backtest results".into()
         } else {
-            self.summary.strategy.clone()
+            self.summary.strategy.clone().into()
         }
     }
 
@@ -227,7 +153,7 @@ impl BacktestResultsView {
         if self.summary.strategy.is_empty() {
             None
         } else {
-            Some(self.summary.strategy.clone())
+            Some(self.summary.strategy.clone().into())
         }
     }
 
@@ -297,8 +223,37 @@ impl BacktestResultsView {
         }));
     }
 
+    /// The in-sample stat strip, or — when the engine returned no statistics at
+    /// all — a designed empty state instead of a row of seven em-dashes that
+    /// looks broken.
+    fn render_summary(&self) -> impl IntoElement {
+        let summary = &self.summary;
+        if summary.is_empty() {
+            return Callout::new()
+                .severity(Severity::Info)
+                .icon(IconName::Info)
+                .title("No statistics for this run")
+                .description("The engine returned no statistics for this backtest.")
+                .into_any_element();
+        }
+        h_flex()
+            .gap_6()
+            .flex_wrap()
+            .child(stat("Net profit", fmt_money(summary.net_profit).into()))
+            .child(stat("Return", fmt_pct(summary.total_return).into()))
+            .child(stat("Sharpe", fmt_ratio(summary.sharpe).into()))
+            .child(stat("Max drawdown", fmt_pct(summary.max_drawdown).into()))
+            .child(stat("Win rate", fmt_pct(summary.win_rate).into()))
+            .child(stat("Turnover", fmt_turns(summary.turnover).into()))
+            .child(stat("Trades", fmt_count(summary.num_trades).into()))
+            .into_any_element()
+    }
+
     /// The one gated verb: Paper-trade (one click) + Deploy live (arm/confirm).
-    /// Only shown when the result belongs to a known strategy.
+    /// Only shown when the result belongs to a known strategy. The live deploy
+    /// is a real-money action, so once the confirm step is armed the button is
+    /// styled with the error tint and a warning callout sits above the bar — no
+    /// label-only signal for an action that moves money.
     fn render_deploy_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let has_strategy = self.strategy_path().is_some();
         let running = matches!(self.deploy, DeployState::Running);
@@ -312,13 +267,15 @@ impl BacktestResultsView {
             DeployState::Running => Some("Deploying…".into()),
             DeployState::Done(message) | DeployState::Failed(message) => Some(message.clone()),
         };
-        h_flex()
+
+        let bar = h_flex()
             .gap_2()
             .child(
-                // Cross-link to where runs live (the Runs dock). The reverse
-                // link (a Runs row opening its results tab) needs richer run
-                // events from the engine and is tracked separately.
-                Button::new("studio-view-runs", "View in Runs").on_click(|_, window, cx| {
+                // "Open Runs" is honest: it opens the Runs dock, it does not
+                // select THIS run. The reverse link (a Runs row opening its
+                // results tab) needs richer run events from the engine and is
+                // tracked separately.
+                Button::new("studio-open-runs", "Open Runs").on_click(|_, window, cx| {
                     window.dispatch_action(Box::new(runs_dock::ToggleFocus), cx);
                 }),
             )
@@ -327,59 +284,108 @@ impl BacktestResultsView {
                     Button::new("studio-paper-trade", "Paper-trade")
                         .label_size(LabelSize::Small)
                         .disabled(running)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.paper_trade(window, cx)),
-                        ),
+                        .on_click(cx.listener(|this, _, window, cx| this.paper_trade(window, cx))),
                 )
-                .child(
-                    Button::new("studio-deploy-live", live_label)
+                .child({
+                    let mut live = Button::new("studio-deploy-live", live_label)
                         .label_size(LabelSize::Small)
                         .disabled(running)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.deploy_live(window, cx)),
+                        .on_click(cx.listener(|this, _, window, cx| this.deploy_live(window, cx)));
+                    if self.awaiting_live_confirm {
+                        live = live.style(ButtonStyle::Tinted(TintColor::Error));
+                    }
+                    live
+                })
+            })
+            .children(status.map(|message| {
+                Label::new(message)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+            }));
+
+        v_flex()
+            .gap_2()
+            .when(has_strategy && self.awaiting_live_confirm, |this| {
+                this.child(
+                    Callout::new()
+                        .severity(Severity::Warning)
+                        .icon(IconName::Warning)
+                        .title("This sends a LIVE, real-money deploy")
+                        .description(
+                            "Click Confirm live deploy to proceed, or switch away to cancel.",
                         ),
                 )
             })
-            .children(
-                status.map(|message| {
-                    Label::new(message).size(LabelSize::Small).color(Color::Muted)
-                }),
-            )
+            .child(bar)
     }
 
-    /// The out-of-sample readout: the honest verdict + in-sample-vs-OOS pairing
-    /// once diagnostics load; an honest placeholder until then.
-    fn render_diagnostics(&self) -> impl IntoElement {
+    /// The out-of-sample readout. Four designed states: a loading skeleton, a
+    /// route-absent Callout (no retry — retrying a missing route can't help), a
+    /// retryable Failed Banner with a Retry, and the loaded verdict + pairing.
+    fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.diagnostics {
-            DiagState::Loading => v_flex().child(
-                Label::new("Checking out-of-sample robustness…")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            ),
-            DiagState::Unavailable => v_flex().child(
-                Label::new(
-                    "Out-of-sample robustness arrives once the engine diagnostics route is deployed.",
-                )
-                .size(LabelSize::Small)
-                .color(Color::Muted),
-            ),
-            DiagState::Ready(diagnostics) => v_flex()
-                .gap_2()
-                .child(Label::new(diagnostics.verdict()))
+            DiagState::Loading => render_diagnostics_skeleton().into_any_element(),
+            DiagState::Unavailable => Callout::new()
+                .severity(Severity::Info)
+                .icon(IconName::Info)
+                .title("Out-of-sample robustness")
+                .description("Arrives once the engine diagnostics route is deployed.")
+                .into_any_element(),
+            DiagState::Failed(message) => Banner::new()
+                .severity(Severity::Warning)
                 .child(
-                    h_flex()
-                        .gap_6()
-                        .flex_wrap()
-                        .child(stat("Sharpe (in-sample)", ratio(diagnostics.in_sample_sharpe)))
-                        .child(stat(
-                            "Sharpe (out-of-sample)",
-                            ratio(diagnostics.out_of_sample_sharpe),
-                        ))
-                        .child(stat("Robustness", ratio(diagnostics.robustness)))
-                        .child(stat("Sensitivity", diagnostics.sensitivity.clone())),
-                ),
+                    Label::new(format!("Couldn't load robustness diagnostics: {message}"))
+                        .size(LabelSize::Small),
+                )
+                .action_slot(
+                    Button::new("studio-diagnostics-retry", "Retry")
+                        .label_size(LabelSize::Small)
+                        .on_click(cx.listener(|this, _, _, cx| this.fetch_diagnostics(cx))),
+                )
+                .into_any_element(),
+            DiagState::Ready(diagnostics) => {
+                let verdict = verdict_text(robustness_verdict(diagnostics));
+                let sensitivity: SharedString = diagnostics
+                    .sensitivity
+                    .clone()
+                    .map(SharedString::from)
+                    .unwrap_or_else(|| auracle_studio_results::MISSING.into());
+                v_flex()
+                    .gap_2()
+                    .child(Label::new(verdict))
+                    .child(
+                        h_flex()
+                            .gap_6()
+                            .flex_wrap()
+                            .child(stat(
+                                "Sharpe (in-sample)",
+                                fmt_ratio(diagnostics.in_sample_sharpe).into(),
+                            ))
+                            .child(stat(
+                                "Sharpe (out-of-sample)",
+                                fmt_ratio(diagnostics.out_of_sample_sharpe).into(),
+                            ))
+                            .child(stat("Robustness", fmt_ratio(diagnostics.robustness).into()))
+                            .child(stat("Sensitivity", sensitivity)),
+                    )
+                    .into_any_element()
+            }
         }
     }
+}
+
+/// A designed loading skeleton for the diagnostics section — placeholder cells,
+/// not a bare spinner — so the loading state reads as "checking", consistent
+/// with the settings-page exemplar.
+fn render_diagnostics_skeleton() -> impl IntoElement {
+    let skeleton_cell = || {
+        v_flex().gap_1().child(
+            Label::new("Checking out-of-sample robustness…")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+    };
+    v_flex().gap_2().child(skeleton_cell())
 }
 
 fn deploy_state_from<E: std::fmt::Display>(
@@ -415,7 +421,6 @@ impl Item for BacktestResultsView {
 
 impl Render for BacktestResultsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let summary = &self.summary;
         v_flex()
             .track_focus(&self.focus_handle(cx))
             .size_full()
@@ -431,19 +436,8 @@ impl Render for BacktestResultsView {
                             .color(Color::Muted),
                     ),
             )
-            .child(
-                h_flex()
-                    .gap_6()
-                    .flex_wrap()
-                    .child(stat("Net profit", money(summary.net_profit)))
-                    .child(stat("Return", pct(summary.total_return)))
-                    .child(stat("Sharpe", ratio(summary.sharpe)))
-                    .child(stat("Max drawdown", pct(summary.max_drawdown)))
-                    .child(stat("Win rate", pct(summary.win_rate)))
-                    .child(stat("Turnover", turns(summary.turnover)))
-                    .child(stat("Trades", count(summary.num_trades))),
-            )
-            .child(self.render_diagnostics())
+            .child(self.render_summary())
+            .child(self.render_diagnostics(cx))
             .child(self.render_deploy_bar(cx))
     }
 }
@@ -457,64 +451,4 @@ pub fn open_backtest_results(
 ) {
     let view = cx.new(|cx| BacktestResultsView::new(summary, cx));
     workspace.add_item_to_active_pane(Box::new(view), None, true, window, cx);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_present_stats_and_leaves_missing_as_none() {
-        let value = serde_json::json!({
-            "stats": { "total_return": 0.161, "sharpe": 1.3, "num_trades": 142 }
-        });
-        let summary = BacktestSummary::from_engine("OvernightGapReversion", &value);
-        assert_eq!(summary.strategy, SharedString::from("OvernightGapReversion"));
-        assert_eq!(summary.total_return, Some(0.161));
-        assert_eq!(summary.sharpe, Some(1.3));
-        assert_eq!(summary.num_trades, Some(142));
-        // Absent fields are never fabricated.
-        assert_eq!(summary.max_drawdown, None);
-        assert_eq!(summary.win_rate, None);
-    }
-
-    #[test]
-    fn missing_stats_block_yields_all_none() {
-        let summary = BacktestSummary::from_engine("S", &serde_json::json!({}));
-        assert_eq!(summary.total_return, None);
-        assert_eq!(summary.sharpe, None);
-        assert_eq!(summary.num_trades, None);
-    }
-
-    #[test]
-    fn formatters_render_missing_as_em_dash() {
-        assert_eq!(pct(None), SharedString::from("—"));
-        assert_eq!(ratio(None), SharedString::from("—"));
-        assert_eq!(money(None), SharedString::from("—"));
-        assert_eq!(count(None), SharedString::from("—"));
-        assert_eq!(pct(Some(0.161)), SharedString::from("+16.1%"));
-        assert_eq!(money(Some(-456.0)), SharedString::from("-$456"));
-        assert_eq!(ratio(Some(1.3)), SharedString::from("1.30"));
-    }
-
-    #[test]
-    fn diagnostics_verdict_is_honest_about_oos_decay() {
-        let overfit = serde_json::json!({
-            "in_sample": { "sharpe": 2.8 },
-            "out_of_sample": { "sharpe": -0.2 },
-            "robustness": 0.1, "sensitivity": "high"
-        });
-        let overfit = StudioDiagnostics::from_engine(&overfit);
-        assert_eq!(overfit.out_of_sample_sharpe, Some(-0.2));
-        assert!(overfit.verdict().to_string().contains("does not survive"));
-
-        let healthy = serde_json::json!({
-            "in_sample": { "sharpe": 1.3 },
-            "out_of_sample": { "sharpe": 1.1 },
-            "robustness": 0.78, "sensitivity": "low"
-        });
-        let healthy = StudioDiagnostics::from_engine(&healthy);
-        assert_eq!(healthy.sensitivity, SharedString::from("low"));
-        assert!(healthy.verdict().to_string().contains("holds out-of-sample"));
-    }
 }

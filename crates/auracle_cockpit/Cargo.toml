@@ -15,8 +15,10 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 auracle_backtest_results.workspace = true
+auracle_cockpit_state.workspace = true
 auracle_connections.workspace = true
 auracle_deploy_gate.workspace = true
+auracle_studio_results.workspace = true
 editor.workspace = true
 gpui.workspace = true
 http_client.workspace = true
