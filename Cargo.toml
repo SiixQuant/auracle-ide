@@ -17,6 +17,7 @@ members = [
     "crates/audio",
     "crates/auracle_account",
     "crates/auracle_agent_commands",
+    "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
     "crates/auracle_cockpit",
     "crates/auracle_connect",
