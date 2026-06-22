@@ -48,11 +48,18 @@ pub fn license_summary(status: &str, days_remaining: Option<i64>) -> LicenseSumm
             detail: Some("Never expires".into()),
             tone: LicenseTone::Positive,
         },
-        "active" => LicenseSummary {
-            label: "Active".into(),
-            detail: days_remaining.map(days_left_phrase),
-            tone: LicenseTone::Positive,
-        },
+        "active" => {
+            let (detail, tone) = match days_remaining {
+                Some(0) => (Some("Expires today".into()), LicenseTone::Caution),
+                Some(n) => (Some(days_left_phrase(n)), LicenseTone::Positive),
+                None => (None, LicenseTone::Positive),
+            };
+            LicenseSummary {
+                label: "Active".into(),
+                detail,
+                tone,
+            }
+        }
         "expired" => LicenseSummary {
             label: "Expired".into(),
             detail: Some("Renew to restore access".into()),
@@ -119,6 +126,21 @@ mod tests {
     fn active_with_one_day_is_singular() {
         let summary = license_summary("active", Some(1));
         assert_eq!(summary.detail, Some("1 day left".into()));
+    }
+
+    #[test]
+    fn active_expiring_today_reads_plainly_and_cautions() {
+        // Zero days remaining shouldn't read "0 days left" — say it plainly,
+        // and flag it (Caution) since it's urgent but not yet expired.
+        let summary = license_summary("active", Some(0));
+        assert_eq!(
+            summary,
+            LicenseSummary {
+                label: "Active".into(),
+                detail: Some("Expires today".into()),
+                tone: LicenseTone::Caution,
+            }
+        );
     }
 
     #[test]
