@@ -1522,6 +1522,9 @@ dependencies = [
 
 [[package]]
 name = "auracle_runway"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_schedules"
 version = "0.1.0"
 
@@ -1548,13 +1551,17 @@ dependencies = [
 [[package]]
 name = "auracle_status_view"
 version = "0.1.0"
+
+[[package]]
+name = "auracle_strategies"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_studio_results"
 version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
-name = "auracle_strategies"
-version = "0.1.0"
 
 [[package]]
 name = "auracle_validation"
