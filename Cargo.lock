@@ -1447,6 +1447,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_connect_state"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_connections"
 version = "0.1.0"
 dependencies = [
