@@ -1,17 +1,20 @@
 //! The four states every Auracle surface renders, behind one gpui-free seam.
 //!
-//! The Zed-parity rubric requires every surface to design its loading, empty,
-//! error, and success states — never a blank panel or a raw spinner. To make
-//! that checkable without rendering GPUI (which can't compile without the Metal
-//! toolchain), the mapping from a fetch outcome to a rendered state lives here,
-//! as a pure function over plain data. A surface's `render` becomes a thin
-//! `match` over [`ViewState`]; this module is the single place that decides the
-//! state, so no surface can silently forget one.
+//! Every surface must design its loading, empty, error, and success states —
+//! never a blank panel or a raw spinner. To make that checkable without
+//! rendering GPUI (which can't compile without the platform graphics toolchain),
+//! the mapping from a fetch outcome to a rendered state lives here, as a pure
+//! function over plain data. A surface's `render` becomes a thin `match` over
+//! [`ViewState`]; this module is the single place that decides the loading,
+//! empty, ready, and retryable-error states, so no surface can silently forget
+//! one. A permanent (non-retryable) error is the one state a surface states
+//! explicitly, via [`ViewState::permanent_error`].
 //!
 //! The quality bar every surface is held to is written in `RUBRIC.md` next to
 //! this crate.
 
 /// What a surface renders right now.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ViewState<T> {
     /// The engine fetch is in flight — render a skeleton.
     Loading,
@@ -26,8 +29,27 @@ pub enum ViewState<T> {
 }
 
 impl<T> ViewState<T> {
-    /// Whether the surface should offer a Retry affordance — true only for an
-    /// error the caller marked retryable.
+    /// An error the surface should offer to retry — a transient failure such as
+    /// the engine being briefly unreachable. This is what [`Load::into_view`]
+    /// produces for any failed fetch.
+    pub fn retryable_error(message: impl Into<String>) -> Self {
+        ViewState::Error {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    /// An error retrying cannot fix, such as an unsupported platform. Surfaces
+    /// construct this explicitly; the fetch mapping never produces it.
+    pub fn permanent_error(message: impl Into<String>) -> Self {
+        ViewState::Error {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    /// Whether the surface should offer a Retry affordance — true only for a
+    /// retryable error.
     pub fn should_retry(&self) -> bool {
         matches!(
             self,
@@ -40,6 +62,7 @@ impl<T> ViewState<T> {
 }
 
 /// The outcome of an engine fetch, before it is mapped to a [`ViewState`].
+#[derive(Debug, Clone, PartialEq)]
 pub enum Load<T> {
     /// The fetch is still running.
     Pending,
@@ -51,8 +74,9 @@ pub enum Load<T> {
 
 impl<T> Load<T> {
     /// Map a fetch outcome to the state a surface should render. `is_empty`
-    /// decides whether a successful payload is "empty"; `empty_hint` is shown
-    /// in that case.
+    /// decides whether a successful payload is "empty"; `empty_hint` is shown in
+    /// that case. A failed fetch always maps to a *retryable* error; a surface
+    /// with a permanent error uses [`ViewState::permanent_error`] directly.
     pub fn into_view(
         self,
         is_empty: impl FnOnce(&T) -> bool,
@@ -60,10 +84,7 @@ impl<T> Load<T> {
     ) -> ViewState<T> {
         match self {
             Load::Pending => ViewState::Loading,
-            Load::Failed(message) => ViewState::Error {
-                message,
-                retryable: true,
-            },
+            Load::Failed(message) => ViewState::retryable_error(message),
             Load::Done(value) if is_empty(&value) => ViewState::Empty {
                 hint: empty_hint.into(),
             },
@@ -87,81 +108,80 @@ mod tests {
     #[test]
     fn pending_load_is_loading() {
         let state: ViewState<Vec<u8>> = Load::Pending.into_view(Vec::is_empty, "no rows yet");
-        assert!(matches!(state, ViewState::Loading));
+        assert_eq!(state, ViewState::Loading);
     }
 
     #[test]
     fn failed_load_is_a_retryable_error_carrying_the_message() {
         let state: ViewState<Vec<u8>> =
             Load::Failed("engine unreachable".into()).into_view(Vec::is_empty, "no rows yet");
-        match state {
-            ViewState::Error { message, retryable } => {
-                assert_eq!(message, "engine unreachable");
-                assert!(retryable);
-            }
-            other => panic!("expected Error, got {:?}", DebugState(&other)),
-        }
+        assert_eq!(state, ViewState::retryable_error("engine unreachable"));
     }
 
     #[test]
     fn done_load_with_a_non_empty_payload_is_ready_with_the_value() {
         let state = Load::Done(vec![1, 2, 3]).into_view(Vec::is_empty, "no rows yet");
-        match state {
-            ViewState::Ready(value) => assert_eq!(value, vec![1, 2, 3]),
-            other => panic!("expected Ready, got {:?}", DebugState(&other)),
-        }
+        assert_eq!(state, ViewState::Ready(vec![1, 2, 3]));
     }
 
     #[test]
     fn done_load_with_an_empty_payload_is_empty_with_the_hint() {
         let state: ViewState<Vec<u8>> = Load::Done(vec![]).into_view(Vec::is_empty, "no rows yet");
-        match state {
-            ViewState::Empty { hint } => assert_eq!(hint, "no rows yet"),
-            other => panic!("expected Empty, got {:?}", DebugState(&other)),
-        }
+        assert_eq!(
+            state,
+            ViewState::Empty {
+                hint: "no rows yet".into()
+            }
+        );
+    }
+
+    #[test]
+    fn emptiness_follows_the_supplied_predicate_not_the_payload_shape() {
+        // The predicate decides Empty vs Ready — not the payload's intrinsic
+        // shape. This is the whole reason `into_view` takes a predicate rather
+        // than hard-coding a length check, and it's the contract the list and
+        // non-list surfaces both rely on. Drive it so the predicate DISAGREES
+        // with literal emptiness, in both directions, including a scalar.
+        let scalar_empty = Load::Done(0u32).into_view(|n| *n == 0, "zero");
+        assert_eq!(
+            scalar_empty,
+            ViewState::Empty {
+                hint: "zero".into()
+            }
+        );
+
+        let forced_empty = Load::Done(vec![1, 2, 3]).into_view(|_| true, "forced");
+        assert_eq!(
+            forced_empty,
+            ViewState::Empty {
+                hint: "forced".into()
+            }
+        );
+
+        let forced_ready = Load::Done(Vec::<i32>::new()).into_view(|_| false, "unused");
+        assert_eq!(forced_ready, ViewState::Ready(vec![]));
     }
 
     #[test]
     fn into_list_view_uses_vec_emptiness() {
         let empty: ViewState<Vec<i32>> = Load::Done(vec![]).into_list_view("no runs yet");
-        assert!(matches!(empty, ViewState::Empty { hint } if hint == "no runs yet"));
+        assert_eq!(
+            empty,
+            ViewState::Empty {
+                hint: "no runs yet".into()
+            }
+        );
 
         let filled: ViewState<Vec<i32>> = Load::Done(vec![7]).into_list_view("no runs yet");
-        assert!(matches!(filled, ViewState::Ready(rows) if rows == vec![7]));
+        assert_eq!(filled, ViewState::Ready(vec![7]));
     }
 
     #[test]
     fn only_a_retryable_error_should_show_retry() {
-        let retryable: ViewState<()> = ViewState::Error {
-            message: "timed out".into(),
-            retryable: true,
-        };
-        let permanent: ViewState<()> = ViewState::Error {
-            message: "unsupported platform".into(),
-            retryable: false,
-        };
-        assert!(retryable.should_retry());
-        assert!(!permanent.should_retry());
+        assert!(ViewState::<()>::retryable_error("timed out").should_retry());
+        assert!(!ViewState::<()>::permanent_error("unsupported platform").should_retry());
         assert!(!ViewState::<()>::Loading.should_retry());
         assert!(!ViewState::<()>::Empty { hint: "x".into() }.should_retry());
         assert!(!ViewState::Ready(()).should_retry());
-    }
-}
-
-/// Test-only helper so panics on the wrong variant read clearly without
-/// requiring `T: Debug`.
-#[cfg(test)]
-struct DebugState<'a, T>(&'a ViewState<T>);
-
-#[cfg(test)]
-impl<T> std::fmt::Debug for DebugState<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match self.0 {
-            ViewState::Loading => "Loading",
-            ViewState::Empty { .. } => "Empty",
-            ViewState::Error { .. } => "Error",
-            ViewState::Ready(_) => "Ready",
-        };
-        f.write_str(name)
     }
 }
