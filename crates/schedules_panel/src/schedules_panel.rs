@@ -371,7 +371,7 @@ impl Panel for SchedulesPanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        7
+        9
     }
 }
 

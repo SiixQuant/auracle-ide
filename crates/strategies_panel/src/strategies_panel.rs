@@ -292,7 +292,7 @@ impl Panel for StrategiesPanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        6
+        8
     }
 }
 

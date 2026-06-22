@@ -740,7 +740,7 @@ impl Panel for AuracleSettingsPanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        14
+        15
     }
 }
 
