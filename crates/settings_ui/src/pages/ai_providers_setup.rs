@@ -36,7 +36,7 @@ use auracle_ai_settings::{
 };
 use auracle_view_state::ViewState;
 use fs::Fs;
-use gpui::{AnyView, Entity, FocusHandle, Focusable, ScrollHandle, WeakEntity, prelude::*};
+use gpui::{AnyView, Entity, FocusHandle, Focusable, ScrollHandle, Task, WeakEntity, prelude::*};
 use language_model::{
     ConfigurationViewTargetAgent, LanguageModelProvider, LanguageModelProviderId,
     LanguageModelRegistry,
@@ -101,6 +101,14 @@ pub(crate) struct AiProvidersPage {
     /// Transient feedback from the most recent "Set as default" attempt.
     set_default_feedback: Option<SetDefaultFeedback>,
     scroll_handle: ScrollHandle,
+    /// Best-effort engine→IDE key import kicked off when the page opens. Held so
+    /// the task isn't dropped (and cancelled) before it can authenticate the
+    /// engine-designated provider. Kept separate from `_mirror_task` so a "Set
+    /// as default" mirror never cancels an in-flight import, or vice versa.
+    _import_task: Option<Task<()>>,
+    /// Best-effort IDE→engine mirror of the most recent "Set as default" choice.
+    /// Held separately from `_import_task` for the same reason.
+    _mirror_task: Option<Task<()>>,
 }
 
 /// The outcome of the last "Set as default" click, shown inline. Held as a small
@@ -126,9 +134,105 @@ impl AiProvidersPage {
             configuration_views: HashMap::default(),
             set_default_feedback: None,
             scroll_handle: ScrollHandle::new(),
+            _import_task: None,
+            _mirror_task: None,
         };
         page.build_configuration_views(window, cx);
+        page.import_engine_key(cx);
         page
+    }
+
+    /// Engine→IDE key import (the `load_shared_and_import` half of cross-store
+    /// sync): if the engine designated an AI provider the IDE hasn't yet
+    /// authenticated, pull that provider's plaintext key over loopback and
+    /// import it into the IDE keychain so the provider's "Configured" tick and
+    /// "Set as default" control light up without the user re-pasting a key the
+    /// launcher already holds.
+    ///
+    /// Best-effort by contract: if the shared-settings snapshot is still
+    /// `Pending` (it loads asynchronously when the window opens) we skip rather
+    /// than block — the user can still configure any provider manually. Honesty:
+    /// a key is imported (and the provider marked configured) ONLY when the
+    /// engine actually returns one; a 404/error is treated as "nothing to
+    /// import", never a fake-authenticated state, and the key is never logged.
+    fn import_engine_key(&mut self, cx: &mut Context<Self>) {
+        // The shared-settings snapshot lives on the window. Read only its
+        // engine-designated provider name here; if it isn't loaded yet, skip.
+        let engine_provider = self
+            .settings_window
+            .read_with(cx, |settings_window, _| {
+                match &settings_window.shared_settings {
+                    auracle_view_state::Load::Done(settings) => {
+                        let provider = settings.ai_model.provider.trim();
+                        (!provider.is_empty()).then(|| provider.to_string())
+                    }
+                    _ => None,
+                }
+            })
+            .ok()
+            .flatten();
+        let Some(engine_provider) = engine_provider else {
+            return;
+        };
+
+        // The engine names the provider by its vault-key (e.g. `deepseek_api_key`)
+        // while the IDE registry keys by id (e.g. `auracle-agent`). Translate so
+        // the registry lookup hits; an engine name the IDE has no provider for
+        // returns `None` and we leave it alone.
+        let Some(ide_provider_id) = auracle_connections::engine_provider_to_ide(&engine_provider)
+        else {
+            return;
+        };
+
+        // Capture the http client OUTSIDE the spawn (it needs the sync `cx`).
+        let http = cx.http_client();
+        self._import_task = Some(cx.spawn(async move |this, cx| {
+            // Re-find the provider from the registry INSIDE the task on every
+            // `cx.update`, rather than holding an `Arc<dyn LanguageModelProvider>`
+            // across an `.await`. `AsyncApp::update` returns the closure value
+            // directly, so each lookup comes back as a plain `Option`.
+            // `None` means the provider is no longer in the registry — nothing to
+            // import.
+            let Some(authenticated) = cx.update(|cx| {
+                find_visible_provider(ide_provider_id, cx)
+                    .map(|provider| provider.is_authenticated(cx))
+            }) else {
+                return;
+            };
+            // Already authenticated locally — nothing to import.
+            if authenticated {
+                return;
+            }
+
+            // Pull the engine's key (loopback-only handoff). A 404 (engine holds
+            // no key) surfaces as an error we treat as "nothing to import". The
+            // engine vault-key name is what `fetch_ai_key` expects. Never log the
+            // returned key.
+            let Ok((_provider, key)) =
+                auracle_connections::fetch_ai_key(http, &engine_provider).await
+            else {
+                return;
+            };
+
+            // Import the key, then authenticate so the freshly-imported key is
+            // loaded. Both go through `cx.update` with a fresh registry lookup so
+            // no provider handle is held across the awaits.
+            if let Some(set) = cx.update(|cx| {
+                find_visible_provider(ide_provider_id, cx)
+                    .map(|provider| provider.set_api_key(Some(key), cx))
+            }) {
+                set.await.log_err();
+            }
+            if let Some(authenticate) = cx.update(|cx| {
+                find_visible_provider(ide_provider_id, cx).map(|provider| provider.authenticate(cx))
+            }) {
+                authenticate.await.log_err();
+            }
+
+            // Nudge a redraw so the provider row's "Configured" tick reflects the
+            // import.
+            this.update(cx, |_this, cx| cx.notify()).ok();
+        }));
     }
 
     /// Build (or rebuild) one configuration view per visible provider. The
@@ -158,8 +262,8 @@ impl AiProvidersPage {
     /// Write the local default agent model from `provider`, refusing for an
     /// unauthenticated provider. Mirrors `auracle_onboarding`'s `set_default_model`
     /// (resolve a model → build a [`LanguageModelSelection`] → write
-    /// `agent.default_model`). The engine→IDE key import and IDE→engine PUT are
-    /// deferred (see the module TODO).
+    /// `agent.default_model`), then mirrors the choice up to the engine so the
+    /// launcher reflects the same default.
     fn set_as_default(&mut self, id: LanguageModelProviderId, cx: &mut Context<Self>) {
         let Some(provider) = visible_providers(cx)
             .into_iter()
@@ -199,6 +303,7 @@ impl AiProvidersPage {
         let current = AgentSettings::get_global(cx).default_model.clone();
         let selection = language_model_to_selection(&model, current.as_ref());
         let provider_display = provider.name().0.to_string();
+        let provider_id = provider.id().0.to_string();
         let model_id = model.id().0.to_string();
         let fs = self.fs.clone();
         settings::update_settings_file(fs, cx, move |settings, _cx| {
@@ -209,6 +314,21 @@ impl AiProvidersPage {
             message: format!("Default model set to {provider_display} · {model_id}.").into(),
         });
         cx.notify();
+
+        // Mirror (IDE→engine): best-effort PUT so the launcher reflects the same
+        // default. Non-fatal on failure — the local write above already
+        // succeeded. No key is sent: the IDE keychain key is not readable back
+        // through the provider trait, so we mirror only the selection
+        // (`{provider, model_id}`); the engine authenticates with its own
+        // operator-side key. Translate the IDE registry id to the engine
+        // vault-key name first, or the engine's whitelist rejects the raw id.
+        let engine_provider = auracle_connections::ide_provider_to_engine(&provider_id).to_string();
+        let http = cx.http_client();
+        self._mirror_task = Some(cx.spawn(async move |_this, _cx| {
+            auracle_connections::put_ai_model(http, &engine_provider, &model_id, None)
+                .await
+                .log_err();
+        }));
     }
 
     /// The engine-default header, mapped from the window's shared-settings
@@ -503,14 +623,18 @@ impl Render for AiProvidersPage {
                     .child(Divider::horizontal().flex_grow_1())
                     .child(providers),
             )
-            // TODO(#246): wire the engine→IDE key auto-import and the IDE→engine
-            // mirror PUT (the `load_shared_and_import` / `put_ai_model` /
-            // `fetch_ai_key` paths from `auracle_onboarding::settings_panel`) so a
-            // key configured on either side propagates to the other. The page is
-            // already functional without it — each provider's own configuration
-            // view lets the user enter and save a key locally.
             .into_element()
     }
+}
+
+/// Find a single visible provider by its registry id. Used inside the
+/// engine→IDE import task, which must re-fetch the provider from the registry on
+/// each `cx.update` rather than hold an `Arc<dyn LanguageModelProvider>` across
+/// an `.await`.
+fn find_visible_provider(provider_id: &str, cx: &App) -> Option<Arc<dyn LanguageModelProvider>> {
+    visible_providers(cx)
+        .into_iter()
+        .find(|provider| provider.id().0.as_ref() == provider_id)
 }
 
 /// All visible language-model providers except the hosted Zed-cloud one, which
