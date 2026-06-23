@@ -167,7 +167,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     items.push(SettingsPageItem::SectionHeader("Instrumentation"));
     items.push(SettingsPageItem::SettingItem(SettingItem {
         title: "Performance Profiler",
-        description: "Collect timing data for foreground and background executor tasks so they can be inspected via `zed: open performance profiler`. May lead to increased memory usage.",
+        description: "Collect timing data for foreground and background executor tasks so they can be inspected via `auracle: open performance profiler`. May lead to increased memory usage.",
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("instrumentation.performance_profiler.enabled"),
@@ -301,7 +301,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "CLI Default Open Behavior",
-                description: "How `zed <path>` opens directories when no flag is specified.",
+                description: "How `auracle <path>` opens directories when no flag is specified.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cli_default_open_behavior"),
@@ -8421,7 +8421,7 @@ fn network_page() -> SettingsPage {
                     },
                 }),
                 metadata: Some(Box::new(SettingsFieldMetadata {
-                    placeholder: Some("https://zed.dev"),
+                    placeholder: Some("https://ide.aurapointcapital.com"),
                     ..Default::default()
                 })),
                 files: USER,
