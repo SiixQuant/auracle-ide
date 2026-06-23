@@ -9,7 +9,7 @@
 //! count it wasn't given, and nothing here fabricates an identity the engine
 //! didn't return.
 
-use auracle_account::{LicenseTone, license_summary};
+use auracle_account::{LicenseTone, PersonalSetting, license_summary, personal_settings};
 use auracle_connections::Profile;
 use auracle_view_state::ViewState;
 use gpui::{ScrollHandle, prelude::*};
@@ -49,7 +49,7 @@ pub(crate) fn render_account_page(
             render_loading()
         }
         ViewState::Error { message, retryable } => render_error(&message, retryable, cx),
-        ViewState::Ready(profile) => render_ready(&profile),
+        ViewState::Ready(profile) => render_ready(&profile, cx),
     };
 
     v_flex()
@@ -117,7 +117,7 @@ fn render_error(message: &str, retryable: bool, cx: &mut Context<SettingsWindow>
 }
 
 /// The signed-in identity, plan, and license.
-fn render_ready(profile: &Profile) -> AnyElement {
+fn render_ready(profile: &Profile, cx: &mut Context<SettingsWindow>) -> AnyElement {
     let email = profile
         .email
         .clone()
@@ -159,11 +159,80 @@ fn render_ready(profile: &Profile) -> AnyElement {
             license_color,
             license.detail,
         ))
+        .child(render_personal_settings(cx))
         .into_any_element()
 }
 
 fn section_header() -> impl IntoElement {
     Label::new("Account").size(LabelSize::Large)
+}
+
+/// The "Personal settings" section: the settings Zed treats as the user's own
+/// (appearance, editor font, keymap), surfaced here as native navigation into
+/// the relevant settings page. Identity/plan/license above are engine-owned and
+/// read-only; these are the editable, per-user settings — each row jumps to the
+/// real native control rather than re-implementing it.
+fn render_personal_settings(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
+    let mut section = v_flex()
+        .pt_6()
+        .gap_1()
+        .child(Label::new("Personal settings").size(LabelSize::Large))
+        .child(
+            Label::new("Your appearance and editor preferences, kept per user.")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        );
+
+    for (index, setting) in personal_settings().into_iter().enumerate() {
+        if index > 0 {
+            section = section.child(Divider::horizontal().flex_grow_1());
+        }
+        section = section.child(personal_setting_row(index, setting, cx));
+    }
+
+    section
+}
+
+/// One per-user setting row: label + description on the left, a native button on
+/// the right that navigates to the setting's own native page. The button carries
+/// the `json_path` (a stable settings identifier, not a secret) so the click
+/// lands on a real, editable control.
+fn personal_setting_row(
+    index: usize,
+    setting: PersonalSetting,
+    cx: &mut Context<SettingsWindow>,
+) -> impl IntoElement {
+    let target = setting.target_json_path;
+
+    h_flex()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .py_3()
+        .gap_4()
+        .child(
+            v_flex()
+                .gap_0p5()
+                .child(Label::new(setting.title))
+                .child(
+                    Label::new(setting.description)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                ),
+        )
+        .child(
+            Button::new(("personal-setting", index), "Open")
+                .style(ButtonStyle::Outlined)
+                .tab_index(0_isize)
+                .end_icon(
+                    Icon::new(IconName::ChevronRight)
+                        .size(IconSize::Small)
+                        .color(Color::Muted),
+                )
+                .on_click(cx.listener(move |settings_window, _event, window, cx| {
+                    settings_window.navigate_to_setting(target, window, cx);
+                })),
+        )
 }
 
 /// One label/value row, with the value coloured by `value_color` and an optional
