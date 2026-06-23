@@ -11,11 +11,12 @@ use ui::IntoElement;
 
 use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
-    SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
+    SettingsPage, SettingsPageItem, SubPageLink, SubPageType, USER, active_language,
+    all_language_names,
     pages::{
         open_audio_test_window, render_account_page, render_ai_providers_page,
-        render_data_sources_page, render_edit_prediction_setup_page, render_skills_setup_page,
-        render_tool_permissions_setup_page,
+        render_connections_page, render_data_sources_page, render_edit_prediction_setup_page,
+        render_skills_setup_page, render_tool_permissions_setup_page,
     },
 };
 
@@ -103,31 +104,24 @@ fn connections_page() -> SettingsPage {
                 render: render_account_page,
             }),
             SettingsPageItem::SectionHeader("Broker connections"),
-            SettingsPageItem::ActionLink(ActionLink {
+            SettingsPageItem::SubPageLink(SubPageLink {
                 title: "Connect a broker".into(),
+                // Tagged so the settings window builds the broker-connect entity
+                // (which holds credential editors) on push and drops it on pop,
+                // exactly like the "Model providers" sub-page.
+                r#type: SubPageType::BrokerConnect,
+                // Deep-link target for `OpenBrokerWizard`/`OpenSettingsAt`, so the
+                // deploy gate and command palette can land directly on this page.
+                json_path: Some(auracle_connections::BROKER_CONNECT_SETTINGS_PATH),
                 description: Some(
                     "Connect a broker to route orders and pull market data. \
-                     The wizard shows what each broker can do before you connect."
+                     Each broker shows what it can do before you connect."
                         .into(),
                 ),
-                button_text: "Open".into(),
-                on_click: Arc::new(|settings_window, window, cx| {
-                    let Some(original_window) = settings_window.original_window else {
-                        return;
-                    };
-                    original_window
-                        .update(cx, |_workspace, original_window, cx| {
-                            original_window.dispatch_action(
-                                auracle_connections::OpenBrokerWizard.boxed_clone(),
-                                cx,
-                            );
-                            original_window.activate_window();
-                        })
-                        .ok();
-                    window.remove_window();
-                }),
+                in_json: false,
                 files: USER,
                 always_visible: true,
+                render: render_connections_page,
             }),
             SettingsPageItem::SectionHeader("Data sources"),
             SettingsPageItem::SubPageLink(SubPageLink {

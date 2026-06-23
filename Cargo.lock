@@ -1472,11 +1472,11 @@ dependencies = [
  "futures 0.3.32",
  "gpui",
  "http_client",
- "menu",
  "serde",
  "serde_json",
  "ui",
  "workspace",
+ "zed_actions",
 ]
 
 [[package]]

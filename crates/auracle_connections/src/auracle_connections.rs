@@ -1,10 +1,12 @@
-//! The guided broker-connect wizard — one reusable component.
+//! The native "Connect a broker" settings sub-page.
 //!
 //! A three-step flow (choose broker → enter credentials → confirm
-//! capabilities) rendered natively in GPUI. It is introspection-driven:
-//! the broker list, the credential FIELDS, and the data/paper/live +
-//! asset-kind capability chips all arrive as plain JSON from the engine,
-//! so adding a broker engine-side needs no change here.
+//! capabilities) rendered natively in GPUI as an inline settings sub-page —
+//! it lives inside Zed's own settings chrome, alongside the Account and Data
+//! sources sub-pages, not in a foreign workspace modal. It is
+//! introspection-driven: the broker list, the credential FIELDS, and the
+//! data/paper/live + asset-kind capability chips all arrive as plain JSON from
+//! the engine, so adding a broker engine-side needs no change here.
 //!
 //! Honesty laws baked in:
 //!   * capability chips come ONLY from the engine's unified capability
@@ -13,10 +15,11 @@
 //!     "anything goes";
 //!   * a tri-state "unknown" renders as "not verified yet", never green;
 //!   * sensitive field VALUES are never fetched or shown — the engine
-//!     returns only a masked preview, and the wizard never logs a body.
+//!     returns only a masked preview, and the page never logs a body.
 //!
-//! The same component serves Settings (Browse) and, later, the deploy
-//! gate (Scoped to a strategy's broker) via [`WizardScope`]. Transport +
+//! The page is hosted by the settings window (see [`BrokerWizard::new`]) and
+//! reached either by navigating Connections → "Connect a broker" or via the
+//! [`OpenBrokerWizard`] deep-link action (e.g. the deploy gate). Transport +
 //! auth reuse [`auracle_connect`] (loopback engine_url + api_key).
 
 use std::sync::Arc;
@@ -30,41 +33,41 @@ use gpui::{
 };
 use serde::Deserialize;
 use ui::prelude::*;
-use workspace::{ModalView, Workspace};
+use workspace::Workspace;
 
 actions!(
     auracle,
     [
-        /// Open the broker connection wizard.
+        /// Open the broker connection page in Settings.
         OpenBrokerWizard
     ]
 );
 
+/// The `OpenSettingsAt` path of the native "Connect a broker" sub-page on the
+/// Connections settings page. Shared so the deep-link action and the page
+/// definition can't drift apart.
+pub const BROKER_CONNECT_SETTINGS_PATH: &str = "connections.broker";
+
 pub const MAX_FIELDS: usize = 10;
 
+/// `OpenBrokerWizard` is kept as a stable deep-link entry point (the deploy
+/// gate and the command palette both dispatch it), but it no longer opens a
+/// foreign workspace modal. Instead it opens Settings deep-linked to the native
+/// "Connect a broker" sub-page, so broker-connect lives entirely inside Zed's
+/// own settings chrome like the Account and Data sources sub-pages beside it.
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
-        workspace.register_action(|workspace, _: &OpenBrokerWizard, window, cx| {
-            workspace.toggle_modal(window, cx, |window, cx| BrokerWizard::new(window, cx));
+        workspace.register_action(|_workspace, _: &OpenBrokerWizard, window, cx| {
+            window.dispatch_action(
+                Box::new(zed_actions::OpenSettingsAt {
+                    path: BROKER_CONNECT_SETTINGS_PATH.to_string(),
+                    target: None,
+                }),
+                cx,
+            );
         });
     })
     .detach();
-}
-
-// ── Wizard scope: one component, two mount points ────────────────────
-
-/// Where the wizard is mounted. `Browse` is the Settings home (full
-/// broker grid); `Scoped` is the deploy-time gate, opened straight to the
-/// broker a strategy needs with the asset kinds it must satisfy.
-/// `Scoped` is wired by the deploy-mount increment.
-#[allow(dead_code)]
-#[derive(Clone)]
-pub enum WizardScope {
-    Browse,
-    Scoped {
-        broker: String,
-        required_kinds: Vec<String>,
-    },
 }
 
 // ── Engine JSON shapes (introspection-driven) ────────────────────────
@@ -182,11 +185,87 @@ pub struct AiModelState {
 
 // ── Wizard entity ────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Step {
     ChooseBroker,
     Credentials,
     Confirm,
+}
+
+impl Step {
+    /// The step reached by the "Next" affordance. `Confirm` is terminal — its
+    /// forward action is "Connect", not another step — so it stays put.
+    fn next(self) -> Step {
+        match self {
+            Step::ChooseBroker => Step::Credentials,
+            Step::Credentials => Step::Confirm,
+            Step::Confirm => Step::Confirm,
+        }
+    }
+
+    /// The step reached by the "Back" affordance. `ChooseBroker` is the root and
+    /// has no predecessor, so it stays put (Back is hidden there anyway).
+    fn previous(self) -> Step {
+        match self {
+            Step::ChooseBroker => Step::ChooseBroker,
+            Step::Credentials => Step::ChooseBroker,
+            Step::Confirm => Step::Credentials,
+        }
+    }
+}
+
+/// The default selection for each `select` field: its first option. A paper/live
+/// mode picker must always carry an explicit, valid choice — never an empty
+/// value that the engine would have to guess at — so every `select` field is
+/// seeded with its first listed option and every non-`select` field is omitted.
+/// Pure (no editors, no `cx`) so the seeding rule is unit-tested directly.
+pub fn default_selections(fields: &[FieldMeta]) -> std::collections::HashMap<String, String> {
+    let mut selections = std::collections::HashMap::new();
+    for field in fields {
+        if field.kind == "select"
+            && let Some(first) = field.options.first()
+        {
+            selections.insert(field.name.clone(), first.clone());
+        }
+    }
+    selections
+}
+
+/// Build the JSON request body sent to the engine's `test`/`save` routes from the
+/// field metadata, the chosen `select` options, and the plain text the user typed
+/// into the non-`select` fields (keyed by field name).
+///
+/// The honesty/safety rules live here, gpui-free and tested:
+///   * a `select` field contributes its chosen option (or nothing if, somehow,
+///     no option was chosen) — never free text;
+///   * a non-`select` field contributes its typed value ONLY when non-empty, so
+///     leaving a saved sensitive field blank keeps the stored value rather than
+///     overwriting it with an empty string;
+///   * field order is irrelevant and unknown text entries (no matching field)
+///     are ignored, so the body can only ever contain real, declared fields.
+pub fn build_connection_body(
+    fields: &[FieldMeta],
+    selections: &std::collections::HashMap<String, String>,
+    text_entries: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for field in fields {
+        if field.kind == "select" {
+            if let Some(choice) = selections.get(&field.name) {
+                map.insert(
+                    field.name.clone(),
+                    serde_json::Value::String(choice.clone()),
+                );
+            }
+            continue;
+        }
+        if let Some(value) = text_entries.get(&field.name)
+            && !value.is_empty()
+        {
+            map.insert(field.name.clone(), serde_json::Value::String(value.clone()));
+        }
+    }
+    serde_json::Value::Object(map)
 }
 
 enum TestState {
@@ -195,12 +274,13 @@ enum TestState {
     Verdict { ok: bool, plain: SharedString },
 }
 
+/// The native "Connect a broker" page: an introspection-driven, three-step flow
+/// (choose broker → enter credentials → confirm capabilities) rendered inline
+/// inside Zed's settings chrome. It is hosted as a sub-page entity by the
+/// settings window (mirroring the "Model providers" page), so its credential
+/// editors keep focus across re-renders rather than living in a workspace modal.
 pub struct BrokerWizard {
     focus_handle: FocusHandle,
-    // Reserved: set on construction; read once the scoped-wizard slice
-    // pre-targets a broker/asset-kind from a strategy's needs (deferred).
-    #[allow(dead_code)]
-    scope: WizardScope,
     step: Step,
     brokers: Vec<BrokerSummary>,
     selected: Option<String>,
@@ -216,18 +296,21 @@ pub struct BrokerWizard {
     selections: std::collections::HashMap<String, String>,
     capability: Option<Capability>,
     state: TestState,
+    scroll_handle: gpui::ScrollHandle,
     _task: Option<Task<()>>,
 }
 
 impl BrokerWizard {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Build the page entity (and its pool of credential editors). Called by the
+    /// settings window when the "Connect a broker" sub-page is pushed, where a
+    /// `Window` + `&mut App` are available, so the editors persist across renders.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut editors = Vec::with_capacity(MAX_FIELDS);
         for _ in 0..MAX_FIELDS {
             editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
         }
         let mut this = Self {
             focus_handle: cx.focus_handle(),
-            scope: WizardScope::Browse,
             step: Step::ChooseBroker,
             brokers: Vec::new(),
             selected: None,
@@ -236,6 +319,7 @@ impl BrokerWizard {
             selections: std::collections::HashMap::new(),
             capability: None,
             state: TestState::Idle,
+            scroll_handle: gpui::ScrollHandle::new(),
             _task: None,
         };
         this.load_brokers(cx);
@@ -267,15 +351,8 @@ impl BrokerWizard {
             let capability = get_capability(http, &broker).await.ok();
             this.update(cx, |this, cx| {
                 // Default each select field to its first option so a paper/
-                // live choice is always explicit, never empty.
-                this.selections.clear();
-                for field in &fields {
-                    if field.kind == "select" {
-                        if let Some(first) = field.options.first() {
-                            this.selections.insert(field.name.clone(), first.clone());
-                        }
-                    }
-                }
+                // live choice is always explicit, never empty (pure rule).
+                this.selections = default_selections(&fields);
                 this.fields = fields;
                 this.capability = capability;
                 cx.notify();
@@ -285,28 +362,19 @@ impl BrokerWizard {
     }
 
     fn current_body(&self, cx: &App) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
+        // Read the per-field typed text out of the editors here (the only place
+        // that needs `cx`), then hand the plain values to the pure body builder
+        // so the skip-empty / select-only rules are unit-tested without gpui.
+        let mut text_entries = std::collections::HashMap::new();
         for (i, field) in self.fields.iter().enumerate() {
             if field.kind == "select" {
-                if let Some(choice) = self.selections.get(&field.name) {
-                    map.insert(
-                        field.name.clone(),
-                        serde_json::Value::String(choice.clone()),
-                    );
-                }
                 continue;
             }
-            if i >= self.editors.len() {
-                continue;
-            }
-            let value = self.editors[i].read(cx).text(cx);
-            // Skip empty inputs so an unchanged "(saved)" sensitive field
-            // isn't overwritten with blank.
-            if !value.is_empty() {
-                map.insert(field.name.clone(), serde_json::Value::String(value));
+            if let Some(editor) = self.editors.get(i) {
+                text_entries.insert(field.name.clone(), editor.read(cx).text(cx));
             }
         }
-        serde_json::Value::Object(map)
+        build_connection_body(&self.fields, &self.selections, &text_entries)
     }
 
     fn run_test(&mut self, cx: &mut Context<Self>) {
@@ -677,8 +745,6 @@ impl Focusable for BrokerWizard {
     }
 }
 
-impl ModalView for BrokerWizard {}
-
 impl BrokerWizard {
     fn render_choose(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = v_flex().gap_2();
@@ -711,9 +777,17 @@ impl BrokerWizard {
             );
         }
         v_flex()
-            .gap_2()
-            .child(Label::new("Choose a broker to connect"))
-            .child(list)
+            .gap_1()
+            .child(Label::new("Broker connections").size(LabelSize::Large))
+            .child(
+                Label::new(
+                    "Connect a broker to route orders and pull market data. \
+                     Each broker shows what it can do before you connect.",
+                )
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+            )
+            .child(list.pt_2())
     }
 
     fn render_credentials(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -865,20 +939,20 @@ impl Render for BrokerWizard {
         let step = self.step;
         let has_selection = self.selected.is_some();
 
+        // An inline settings sub-page — no modal card chrome, no surface
+        // background, no border. It fills the sub-page content area and scrolls
+        // like the Account and Data sources sub-pages beside it, matching their
+        // padding so the three Connections pages read as one native surface.
         v_flex()
-            .key_context("BrokerWizard")
+            .id("broker-connect-page")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
-                cx.emit(DismissEvent);
-            }))
-            .w(rems(34.))
-            .p_4()
+            .size_full()
+            .pt_2()
+            .px_8()
+            .pb_16()
             .gap_3()
-            .bg(cx.theme().colors().elevated_surface_background)
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().colors().border)
-            .child(Label::new("Connect a broker").size(LabelSize::Large))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
             .map(|this| match step {
                 Step::ChooseBroker => this.child(self.render_choose(cx)),
                 Step::Credentials => this.child(self.render_credentials(cx)),
@@ -895,11 +969,9 @@ impl Render for BrokerWizard {
                         row.child(
                             Button::new("wiz-back", "Back")
                                 .style(ButtonStyle::Subtle)
+                                .tab_index(0_isize)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.step = match this.step {
-                                        Step::Confirm => Step::Credentials,
-                                        _ => Step::ChooseBroker,
-                                    };
+                                    this.step = this.step.previous();
                                     cx.notify();
                                 })),
                         )
@@ -908,13 +980,15 @@ impl Render for BrokerWizard {
                         row.child(
                             Button::new("wiz-test", "Test")
                                 .style(ButtonStyle::Outlined)
+                                .tab_index(0_isize)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_test(cx))),
                         )
                         .child(
                             Button::new("wiz-next", "Next")
                                 .style(ButtonStyle::Outlined)
+                                .tab_index(0_isize)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.step = Step::Confirm;
+                                    this.step = this.step.next();
                                     cx.notify();
                                 })),
                         )
@@ -923,6 +997,7 @@ impl Render for BrokerWizard {
                         row.child(
                             Button::new("wiz-save", "Connect")
                                 .style(ButtonStyle::Filled)
+                                .tab_index(0_isize)
                                 .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                         )
                     }),
@@ -932,7 +1007,116 @@ impl Render for BrokerWizard {
 
 #[cfg(test)]
 mod tests {
-    use super::{engine_provider_to_ide, ide_provider_to_engine};
+    use super::{
+        FieldMeta, Step, build_connection_body, default_selections, engine_provider_to_ide,
+        ide_provider_to_engine,
+    };
+    use std::collections::HashMap;
+
+    fn text_field(name: &str) -> FieldMeta {
+        FieldMeta {
+            name: name.to_string(),
+            kind: "text".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn select_field(name: &str, options: &[&str]) -> FieldMeta {
+        FieldMeta {
+            name: name.to_string(),
+            kind: "select".to_string(),
+            options: options.iter().map(|option| option.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn step_next_advances_then_settles_on_confirm() {
+        assert_eq!(Step::ChooseBroker.next(), Step::Credentials);
+        assert_eq!(Step::Credentials.next(), Step::Confirm);
+        // Confirm is terminal — its forward action is "Connect", not a step.
+        assert_eq!(Step::Confirm.next(), Step::Confirm);
+    }
+
+    #[test]
+    fn step_previous_retreats_then_settles_on_root() {
+        assert_eq!(Step::Confirm.previous(), Step::Credentials);
+        assert_eq!(Step::Credentials.previous(), Step::ChooseBroker);
+        // ChooseBroker is the root — Back has nowhere to go.
+        assert_eq!(Step::ChooseBroker.previous(), Step::ChooseBroker);
+    }
+
+    #[test]
+    fn default_selections_seeds_each_select_with_its_first_option() {
+        let fields = vec![
+            text_field("api_key"),
+            select_field("mode", &["paper", "live"]),
+            select_field("venue", &["spot", "margin"]),
+        ];
+        let selections = default_selections(&fields);
+        // Exactly the select fields are seeded — text fields are never seeded —
+        // and each gets its first listed option.
+        assert_eq!(selections.len(), 2);
+        assert_eq!(selections.get("mode").map(String::as_str), Some("paper"));
+        assert_eq!(selections.get("venue").map(String::as_str), Some("spot"));
+        assert!(!selections.contains_key("api_key"));
+    }
+
+    #[test]
+    fn default_selections_skips_a_select_with_no_options() {
+        // A select that arrives without options can't be seeded with a real
+        // choice, so it is left unset rather than seeded with an empty string.
+        let fields = vec![select_field("mode", &[])];
+        assert!(default_selections(&fields).is_empty());
+    }
+
+    #[test]
+    fn build_body_uses_chosen_select_and_skips_empty_text() {
+        let fields = vec![
+            text_field("api_key"),
+            text_field("api_secret"),
+            select_field("mode", &["paper", "live"]),
+        ];
+        let mut selections = HashMap::new();
+        selections.insert("mode".to_string(), "live".to_string());
+        let mut text = HashMap::new();
+        text.insert("api_key".to_string(), "abc123".to_string());
+        // api_secret is left blank: a saved sensitive field the user didn't
+        // re-type must NOT be overwritten with an empty string.
+        text.insert("api_secret".to_string(), String::new());
+
+        let body = build_connection_body(&fields, &selections, &text);
+        let object = body.as_object().expect("body is a json object");
+        assert_eq!(
+            object.get("api_key").and_then(|v| v.as_str()),
+            Some("abc123")
+        );
+        assert_eq!(object.get("mode").and_then(|v| v.as_str()), Some("live"));
+        // The blank secret is absent — kept, not cleared.
+        assert!(!object.contains_key("api_secret"));
+    }
+
+    #[test]
+    fn build_body_ignores_unknown_text_and_unchosen_selects() {
+        let fields = vec![
+            text_field("api_key"),
+            select_field("mode", &["paper", "live"]),
+        ];
+        let selections = HashMap::new(); // mode never chosen
+        let mut text = HashMap::new();
+        text.insert("api_key".to_string(), "k".to_string());
+        // A stray entry with no matching field must never leak into the body.
+        text.insert("ghost".to_string(), "value".to_string());
+        // Free text under a select field's name must never be treated as its value.
+        text.insert("mode".to_string(), "typo".to_string());
+
+        let body = build_connection_body(&fields, &selections, &text);
+        let object = body.as_object().expect("body is a json object");
+        assert_eq!(object.len(), 1);
+        assert_eq!(object.get("api_key").and_then(|v| v.as_str()), Some("k"));
+        assert!(!object.contains_key("mode"));
+        assert!(!object.contains_key("ghost"));
+    }
 
     #[test]
     fn engine_to_ide_maps_the_four_shipped_pairs() {

@@ -910,6 +910,13 @@ pub struct SettingsWindow {
     /// and cleared when it is popped (the views can't be rebuilt per render
     /// without dropping editor focus while a user types a key).
     ai_providers_page: Option<Entity<pages::AiProvidersPage>>,
+    /// The live "Connect a broker" sub-page entity. Holds the credential editors
+    /// (whose focus must survive re-renders), so — like `ai_providers_page` —
+    /// it is built when the sub-page is pushed and cleared when it is popped.
+    broker_connect_page: Option<Entity<auracle_connections::BrokerWizard>>,
+    /// Keeps the broker-connect page's `DismissEvent` subscription alive (it pops
+    /// the sub-page once a connection saves). Dropped with the page on pop.
+    broker_connect_subscription: Option<Subscription>,
 }
 
 struct SearchDocument {
@@ -1542,6 +1549,11 @@ enum SubPageType {
     /// backing entity (which caches live provider configuration views) is built
     /// when the page is pushed and dropped when it is popped.
     AiProviders,
+    /// The native "Connect a broker" sub-page on the Connections page. Tagged so
+    /// its backing entity (which holds the credential editors whose focus must
+    /// survive re-renders) is built when the page is pushed and dropped when it
+    /// is popped — mirroring [`SubPageType::AiProviders`].
+    BrokerConnect,
     #[default]
     Other,
 }
@@ -1903,6 +1915,8 @@ impl SettingsWindow {
             shared_settings: auracle_view_state::Load::Pending,
             shared_settings_task: None,
             ai_providers_page: None,
+            broker_connect_page: None,
+            broker_connect_subscription: None,
         };
 
         this.fetch_files(window, cx);
@@ -2136,7 +2150,11 @@ impl SettingsWindow {
                         discriminant: SettingItem { files, .. },
                         ..
                     }) => {
-                        if !auracle_settings_nav::item_visible(files.0 as u32, current_file.0 as u32, false) {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            false,
+                        ) {
                             page_filter[index] = false;
                         } else {
                             any_found_since_last_header = true;
@@ -4117,6 +4135,23 @@ impl SettingsWindow {
             let weak = cx.weak_entity();
             self.ai_providers_page = Some(pages::build_ai_providers_page(weak, window, cx));
         }
+        // Build the "Connect a broker" entity here (where `Window` + `&mut self`
+        // are available) for the same reason as the AI providers page: it holds
+        // credential editors whose focus must survive re-renders. Subscribe to
+        // its `DismissEvent` so a successful connection pops the sub-page back to
+        // the Connections list, mirroring the old modal's auto-close.
+        if sub_page_link.r#type == SubPageType::BrokerConnect && self.broker_connect_page.is_none()
+        {
+            let page = cx.new(|cx| auracle_connections::BrokerWizard::new(window, cx));
+            self.broker_connect_subscription = Some(cx.subscribe_in(
+                &page,
+                window,
+                |settings_window, _page, _event: &gpui::DismissEvent, window, cx| {
+                    settings_window.pop_sub_page(window, cx);
+                },
+            ));
+            self.broker_connect_page = Some(page);
+        }
         self.sub_page_stack
             .push(SubPage::new(sub_page_link, section_header));
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
@@ -4125,6 +4160,10 @@ impl SettingsWindow {
 
     pub(crate) fn ai_providers_page(&self) -> Option<Entity<pages::AiProvidersPage>> {
         self.ai_providers_page.clone()
+    }
+
+    pub(crate) fn broker_connect_page(&self) -> Option<Entity<auracle_connections::BrokerWizard>> {
+        self.broker_connect_page.clone()
     }
 
     /// Push a dynamically-created sub-page with a custom render function.
@@ -4332,6 +4371,13 @@ impl SettingsWindow {
                 // Drop the page entity (and its cached configuration views) so a
                 // fresh one — reflecting current auth state — is built next open.
                 SubPageType::AiProviders => self.ai_providers_page = None,
+                // Drop the broker-connect page (and its credential editors +
+                // dismiss subscription) so a fresh one — reflecting the engine's
+                // current connection state — is built next open.
+                SubPageType::BrokerConnect => {
+                    self.broker_connect_page = None;
+                    self.broker_connect_subscription = None;
+                }
                 _ => {}
             }
         }
@@ -5151,6 +5197,8 @@ pub mod test {
                 shared_settings: auracle_view_state::Load::Pending,
                 shared_settings_task: None,
                 ai_providers_page: None,
+                broker_connect_page: None,
+                broker_connect_subscription: None,
             }
         }
     }
@@ -5285,6 +5333,8 @@ pub mod test {
             shared_settings: auracle_view_state::Load::Pending,
             shared_settings_task: None,
             ai_providers_page: None,
+            broker_connect_page: None,
+            broker_connect_subscription: None,
         };
 
         settings_window.build_filter_table();
