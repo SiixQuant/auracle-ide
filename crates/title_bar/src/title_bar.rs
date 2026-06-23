@@ -1193,6 +1193,9 @@ impl TitleBar {
 
         // Auracle account/settings menu: a generic gear control (no per-user
         // avatar — Auracle has no upstream account), with an update indicator.
+        // The menu items mirror stock Zed's native account menu so the chrome
+        // stays familiar; account/license details live on the native Account
+        // page rather than being surfaced (or fabricated) here.
         let trigger = ButtonLike::new("user-menu").child(
             h_flex()
                 .gap_1()
@@ -1237,14 +1240,6 @@ impl TitleBar {
                         .separator()
                     })
                     .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action(
-                        "Account & Connections",
-                        zed_actions::OpenSettingsAt {
-                            path: "connections.account".into(),
-                            target: None,
-                        }
-                        .boxed_clone(),
-                    )
                     .action("Keymap", Box::new(zed_actions::OpenKeymap))
                     .action(
                         "Themes…",

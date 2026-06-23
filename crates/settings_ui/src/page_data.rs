@@ -8343,7 +8343,10 @@ fn ai_page() -> SettingsPage {
                 // Tagged so `SettingsWindow` builds (and later drops) the backing
                 // entity that caches each provider's live configuration view.
                 r#type: crate::SubPageType::AiProviders,
-                json_path: None,
+                // A synthetic path (no matching settings.json key) so menus and
+                // commands can deep-link straight to this sub-page via
+                // `OpenSettingsAt`, mirroring the agent-skills page.
+                json_path: Some(zed_actions::AI_MODEL_PROVIDERS_SETTINGS_PATH),
                 description: Some(
                     "Configure AI model providers and choose the default model.".into(),
                 ),
