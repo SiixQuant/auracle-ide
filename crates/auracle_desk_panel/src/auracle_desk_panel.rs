@@ -132,7 +132,7 @@ impl DeskPanel {
         .detach();
     }
 
-    fn render_desk(&self, view: &DeskView) -> AnyElement {
+    fn render_desk(&self, view: &DeskView, cx: &App) -> AnyElement {
         let metric_row = |row: &auracle_desk::MetricRow| {
             h_flex()
                 .px_2()
@@ -148,7 +148,8 @@ impl DeskPanel {
                 .child(
                     Label::new(row.value.clone())
                         .size(LabelSize::Small)
-                        .color(tone_color(row.tone)),
+                        .color(tone_color(row.tone))
+                        .buffer_font(cx),
                 )
         };
 
@@ -177,7 +178,8 @@ impl DeskPanel {
                             .child(
                                 Label::new(strategy.pnl.value.clone())
                                     .size(LabelSize::Small)
-                                    .color(tone_color(strategy.pnl.tone)),
+                                    .color(tone_color(strategy.pnl.tone))
+                                    .buffer_font(cx),
                             )
                     }))
             })
@@ -415,7 +417,7 @@ impl Render for DeskPanel {
                 ViewState::Loading => render_skeleton(),
                 ViewState::Empty { .. } => render_skeleton(),
                 ViewState::Error { message, retryable } => render_error(&message, retryable, cx),
-                ViewState::Ready(view) => self.render_desk(&view),
+                ViewState::Ready(view) => self.render_desk(&view, cx),
             }
         };
 
