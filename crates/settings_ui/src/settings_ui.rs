@@ -917,6 +917,28 @@ pub struct SettingsWindow {
     /// Keeps the broker-connect page's `DismissEvent` subscription alive (it pops
     /// the sub-page once a connection saves). Dropped with the page on pop.
     broker_connect_subscription: Option<Subscription>,
+    /// State for the native "Agent rules" sub-page, resolved asynchronously when
+    /// the page is pushed (the prompt store loads async and `AGENTS.md` existence
+    /// is an async `fs` stat) and cleared when it is popped. `None` until ready;
+    /// while `None` the page reports the rules library as still loading rather
+    /// than claiming zero rules. Backs [`pages::render_agent_rules_page`].
+    agent_rules: Option<AgentRulesState>,
+}
+
+/// Resolved inputs for the "Agent rules" sub-page render, gathered once when the
+/// page is pushed so the render stays synchronous and gpui-free decisions defer
+/// to the reducer. Nothing here is fabricated: the booleans come from real `fs`
+/// stats and the store handle is the live prompt store.
+pub(crate) struct AgentRulesState {
+    /// Whether the user-global `AGENTS.md` exists on disk.
+    pub(crate) global_file_exists: bool,
+    /// The first worktree's `AGENTS.md` absolute path, if a worktree is open.
+    pub(crate) project_path: Option<std::path::PathBuf>,
+    /// Whether that project `AGENTS.md` exists on disk.
+    pub(crate) project_file_exists: bool,
+    /// The live prompt store (reusable rules library); `None` if it failed to
+    /// resolve, which the page reports honestly.
+    pub(crate) prompt_store: Option<Entity<prompt_store::PromptStore>>,
 }
 
 struct SearchDocument {
@@ -1554,6 +1576,11 @@ enum SubPageType {
     /// survive re-renders) is built when the page is pushed and dropped when it
     /// is popped — mirroring [`SubPageType::AiProviders`].
     BrokerConnect,
+    /// The native "Agent rules" sub-page on the AI page. Tagged so the real
+    /// prompt store (Zed's reusable rules library) is resolved when the page is
+    /// pushed — letting the render read its rule metadata synchronously — and the
+    /// cached handle is dropped when the page is popped.
+    AgentRules,
     #[default]
     Other,
 }
@@ -1917,6 +1944,7 @@ impl SettingsWindow {
             ai_providers_page: None,
             broker_connect_page: None,
             broker_connect_subscription: None,
+            agent_rules: None,
         };
 
         this.fetch_files(window, cx);
@@ -4152,6 +4180,43 @@ impl SettingsWindow {
             ));
             self.broker_connect_page = Some(page);
         }
+        // Resolve the "Agent rules" sub-page state when it is pushed. The prompt
+        // store loads asynchronously and `AGENTS.md` existence is an async `fs`
+        // stat, so we gather everything off the render thread, cache it, and
+        // `notify()` once ready; until then the page honestly reports the library
+        // as still loading rather than claiming zero rules.
+        if sub_page_link.r#type == SubPageType::AgentRules && self.agent_rules.is_none() {
+            let store_task = prompt_store::PromptStore::global(cx);
+            let fs = workspace::AppState::global(cx).fs.clone();
+            let global_path = paths::agents_file().clone();
+            let project_path = all_projects(self.original_window.as_ref(), cx)
+                .next()
+                .and_then(|project| {
+                    let rel_path = util::rel_path::RelPath::unix("AGENTS.md").ok()?;
+                    let worktree = project.read(cx).visible_worktrees(cx).next()?;
+                    Some(worktree.read(cx).absolutize(rel_path))
+                });
+            cx.spawn(async move |settings_window, cx| {
+                let prompt_store = store_task.await.ok();
+                let global_file_exists = fs.is_file(&global_path).await;
+                let project_file_exists = match project_path.as_ref() {
+                    Some(path) => fs.is_file(path).await,
+                    None => false,
+                };
+                settings_window
+                    .update(cx, |settings_window, cx| {
+                        settings_window.agent_rules = Some(AgentRulesState {
+                            global_file_exists,
+                            project_path,
+                            project_file_exists,
+                            prompt_store,
+                        });
+                        cx.notify();
+                    })
+                    .ok();
+            })
+            .detach();
+        }
         self.sub_page_stack
             .push(SubPage::new(sub_page_link, section_header));
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
@@ -4164,6 +4229,10 @@ impl SettingsWindow {
 
     pub(crate) fn broker_connect_page(&self) -> Option<Entity<auracle_connections::BrokerWizard>> {
         self.broker_connect_page.clone()
+    }
+
+    pub(crate) fn agent_rules(&self) -> Option<&AgentRulesState> {
+        self.agent_rules.as_ref()
     }
 
     /// Push a dynamically-created sub-page with a custom render function.
@@ -4378,6 +4447,9 @@ impl SettingsWindow {
                     self.broker_connect_page = None;
                     self.broker_connect_subscription = None;
                 }
+                // Drop the cached rules state so the next open re-resolves the
+                // store and re-stats the files, reflecting current contents.
+                SubPageType::AgentRules => self.agent_rules = None,
                 _ => {}
             }
         }
@@ -5199,6 +5271,7 @@ pub mod test {
                 ai_providers_page: None,
                 broker_connect_page: None,
                 broker_connect_subscription: None,
+                agent_rules: None,
             }
         }
     }
@@ -5335,6 +5408,7 @@ pub mod test {
             ai_providers_page: None,
             broker_connect_page: None,
             broker_connect_subscription: None,
+            agent_rules: None,
         };
 
         settings_window.build_filter_table();

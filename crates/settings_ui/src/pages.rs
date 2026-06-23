@@ -1,4 +1,5 @@
 mod account_setup;
+mod agent_rules_setup;
 mod ai_providers_setup;
 mod audio_input_output_setup;
 mod audio_test_window;
@@ -11,6 +12,7 @@ mod skills_setup;
 mod tool_permissions_setup;
 
 pub(crate) use account_setup::render_account_page;
+pub(crate) use agent_rules_setup::render_agent_rules_page;
 pub(crate) use ai_providers_setup::{
     AiProvidersPage, build_ai_providers_page, render_ai_providers_page,
 };

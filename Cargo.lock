@@ -1568,6 +1568,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_system_prompt"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_validation"
 version = "0.1.0"
 
@@ -16876,6 +16880,7 @@ dependencies = [
  "auracle_connections",
  "auracle_data_sources",
  "auracle_settings_nav",
+ "auracle_system_prompt",
  "auracle_view_state",
  "cloud_api_types",
  "codestral",
@@ -16903,6 +16908,7 @@ dependencies = [
  "platform_title_bar",
  "pretty_assertions",
  "project",
+ "prompt_store",
  "regex",
  "release_channel",
  "rodio",

@@ -14,9 +14,10 @@ use crate::{
     SettingsPage, SettingsPageItem, SubPageLink, SubPageType, USER, active_language,
     all_language_names,
     pages::{
-        open_audio_test_window, render_account_page, render_ai_providers_page,
-        render_connections_page, render_data_sources_page, render_edit_prediction_setup_page,
-        render_skills_setup_page, render_tool_permissions_setup_page,
+        open_audio_test_window, render_account_page, render_agent_rules_page,
+        render_ai_providers_page, render_connections_page, render_data_sources_page,
+        render_edit_prediction_setup_page, render_skills_setup_page,
+        render_tool_permissions_setup_page,
     },
 };
 
@@ -7939,6 +7940,16 @@ fn ai_page() -> SettingsPage {
     fn agent_configuration_section() -> Box<[SettingsPageItem]> {
         let mut items = vec![
             SettingsPageItem::SectionHeader("Agent Configuration"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Agent Rules".into(),
+                r#type: SubPageType::AgentRules,
+                json_path: None,
+                description: Some("View and edit the agent's standing rules — your global and project AGENTS.md files and the reusable rules library.".into()),
+                in_json: false,
+                files: USER | PROJECT,
+                always_visible: false,
+                render: render_agent_rules_page,
+            }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: "Skills".into(),
                 r#type: Default::default(),
