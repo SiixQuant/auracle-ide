@@ -16,6 +16,7 @@ use gpui::{ScrollHandle, prelude::*};
 use ui::{Divider, prelude::*};
 
 use crate::SettingsWindow;
+use crate::pages::page_helpers::{render_error_with_retry, render_items_with_dividers};
 
 /// Map a [`LicenseTone`] to the theme colour the license row renders in. Only
 /// theme `Color::*` — never a colour literal — so the page tracks the theme.
@@ -90,30 +91,15 @@ fn render_loading() -> AnyElement {
 /// An honest error state — the engine is unreachable or the fetch failed — with
 /// a Retry affordance only when the error is retryable.
 fn render_error(message: &str, retryable: bool, cx: &mut Context<SettingsWindow>) -> AnyElement {
-    v_flex()
-        .gap_2()
-        .child(section_header())
-        .child(
-            Label::new(format!("Couldn't load your account: {message}."))
-                .size(LabelSize::Small)
-                .color(Color::Error),
-        )
-        .when(retryable, |this| {
-            this.child(
-                Button::new("account-retry", "Retry")
-                    .tab_index(0_isize)
-                    .style(ButtonStyle::Outlined)
-                    .start_icon(
-                        Icon::new(IconName::RotateCcw)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    )
-                    .on_click(cx.listener(|settings_window, _event, _window, cx| {
-                        settings_window.load_account_profile(cx);
-                    })),
-            )
-        })
-        .into_any_element()
+    render_error_with_retry(
+        section_header(),
+        "Couldn't load your account",
+        message,
+        retryable,
+        "account-retry",
+        |settings_window, cx| settings_window.load_account_profile(cx),
+        cx,
+    )
 }
 
 /// The signed-in identity, plan, and license.
@@ -173,7 +159,7 @@ fn section_header() -> impl IntoElement {
 /// read-only; these are the editable, per-user settings — each row jumps to the
 /// real native control rather than re-implementing it.
 fn render_personal_settings(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
-    let mut section = v_flex()
+    let section = v_flex()
         .pt_6()
         .gap_1()
         .child(Label::new("Personal settings").size(LabelSize::Large))
@@ -183,14 +169,11 @@ fn render_personal_settings(cx: &mut Context<SettingsWindow>) -> impl IntoElemen
                 .color(Color::Muted),
         );
 
+    let mut rows = Vec::new();
     for (index, setting) in personal_settings().into_iter().enumerate() {
-        if index > 0 {
-            section = section.child(Divider::horizontal().flex_grow_1());
-        }
-        section = section.child(personal_setting_row(index, setting, cx));
+        rows.push(personal_setting_row(index, setting, cx));
     }
-
-    section
+    render_items_with_dividers(section, rows)
 }
 
 /// One per-user setting row: label + description on the left, a native button on
@@ -201,7 +184,7 @@ fn personal_setting_row(
     index: usize,
     setting: PersonalSetting,
     cx: &mut Context<SettingsWindow>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let target = setting.target_json_path;
 
     h_flex()

@@ -12,9 +12,10 @@
 use auracle_data_sources::{DataSourceRow, data_source_rows};
 use auracle_view_state::ViewState;
 use gpui::{ScrollHandle, prelude::*};
-use ui::{Divider, prelude::*};
+use ui::prelude::*;
 
 use crate::SettingsWindow;
+use crate::pages::page_helpers::{render_error_with_retry, render_items_with_dividers};
 
 pub(crate) fn render_data_sources_page(
     settings_window: &SettingsWindow,
@@ -70,30 +71,15 @@ fn render_loading() -> AnyElement {
 }
 
 fn render_error(message: &str, retryable: bool, cx: &mut Context<SettingsWindow>) -> AnyElement {
-    v_flex()
-        .gap_2()
-        .child(section_header())
-        .child(
-            Label::new(format!("Couldn't read your data sources: {message}."))
-                .size(LabelSize::Small)
-                .color(Color::Error),
-        )
-        .when(retryable, |this| {
-            this.child(
-                Button::new("data-sources-retry", "Retry")
-                    .tab_index(0_isize)
-                    .style(ButtonStyle::Outlined)
-                    .start_icon(
-                        Icon::new(IconName::RotateCcw)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    )
-                    .on_click(cx.listener(|settings_window, _event, _window, cx| {
-                        settings_window.load_shared_settings(cx);
-                    })),
-            )
-        })
-        .into_any_element()
+    render_error_with_retry(
+        section_header(),
+        "Couldn't read your data sources",
+        message,
+        retryable,
+        "data-sources-retry",
+        |settings_window, cx| settings_window.load_shared_settings(cx),
+        cx,
+    )
 }
 
 fn render_ready(rows: &[DataSourceRow]) -> AnyElement {
@@ -109,20 +95,13 @@ fn render_ready(rows: &[DataSourceRow]) -> AnyElement {
             .into_any_element();
     }
 
-    let mut list = v_flex().gap_1().child(section_header()).child(
+    let list = v_flex().gap_1().child(section_header()).child(
         Label::new("Market-data vendors the engine holds keys for. Manage these in the launcher.")
             .size(LabelSize::Small)
             .color(Color::Muted),
     );
 
-    for (index, row) in rows.iter().enumerate() {
-        if index > 0 {
-            list = list.child(Divider::horizontal().flex_grow_1());
-        }
-        list = list.child(data_source_row(row));
-    }
-
-    list.into_any_element()
+    render_items_with_dividers(list, rows.iter().map(data_source_row)).into_any_element()
 }
 
 fn section_header() -> impl IntoElement {
