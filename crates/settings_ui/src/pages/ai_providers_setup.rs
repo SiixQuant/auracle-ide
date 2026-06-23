@@ -156,37 +156,48 @@ impl AiProvidersPage {
     /// engine actually returns one; a 404/error is treated as "nothing to
     /// import", never a fake-authenticated state, and the key is never logged.
     fn import_engine_key(&mut self, cx: &mut Context<Self>) {
-        // The shared-settings snapshot lives on the window. Read only its
-        // engine-designated provider name here; if it isn't loaded yet, skip.
-        let engine_provider = self
-            .settings_window
-            .read_with(cx, |settings_window, _| {
-                match &settings_window.shared_settings {
-                    auracle_view_state::Load::Done(settings) => {
-                        let provider = settings.ai_model.provider.trim();
-                        (!provider.is_empty()).then(|| provider.to_string())
-                    }
-                    _ => None,
-                }
-            })
-            .ok()
-            .flatten();
-        let Some(engine_provider) = engine_provider else {
-            return;
-        };
-
-        // The engine names the provider by its vault-key (e.g. `deepseek_api_key`)
-        // while the IDE registry keys by id (e.g. `auracle-agent`). Translate so
-        // the registry lookup hits; an engine name the IDE has no provider for
-        // returns `None` and we leave it alone.
-        let Some(ide_provider_id) = auracle_connections::engine_provider_to_ide(&engine_provider)
-        else {
-            return;
-        };
-
-        // Capture the http client OUTSIDE the spawn (it needs the sync `cx`).
+        // Capture the http client and a weak handle to the window OUTSIDE the
+        // spawn (they need the sync `cx`). We must NOT read the window
+        // synchronously here: `new()` runs from `cx.new(...)` inside
+        // `SettingsWindow::push_sub_page`, where the SettingsWindow entity is
+        // mid-update (leased out of the entity map). A synchronous
+        // `read_with`/`read` of a leased entity is a re-entrant borrow that GPUI
+        // aborts (SIGABRT) — the `.ok()` cannot catch it because the lease
+        // violation panics before any `Result` exists. Reading the window
+        // *inside* the spawned task is safe: by the time the task is polled,
+        // `push_sub_page`'s update has returned and the entity is back in the map.
         let http = cx.http_client();
+        let settings_window = self.settings_window.clone();
         self._import_task = Some(cx.spawn(async move |this, cx| {
+            // Read the engine-designated provider name now that the window is no
+            // longer leased. If the shared-settings snapshot is still loading, or
+            // the engine named no provider, there is nothing to import.
+            let Some(engine_provider) = settings_window
+                .read_with(cx, |settings_window, _| {
+                    match &settings_window.shared_settings {
+                        auracle_view_state::Load::Done(settings) => {
+                            let provider = settings.ai_model.provider.trim();
+                            (!provider.is_empty()).then(|| provider.to_string())
+                        }
+                        _ => None,
+                    }
+                })
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
+
+            // The engine names the provider by its vault-key (e.g.
+            // `deepseek_api_key`) while the IDE registry keys by id (e.g.
+            // `auracle-agent`). Translate so the registry lookup hits; an engine
+            // name the IDE has no provider for returns `None` and we leave it
+            // alone.
+            let Some(ide_provider_id) =
+                auracle_connections::engine_provider_to_ide(&engine_provider)
+            else {
+                return;
+            };
             // Re-find the provider from the registry INSIDE the task on every
             // `cx.update`, rather than holding an `Arc<dyn LanguageModelProvider>`
             // across an `.await`. `AsyncApp::update` returns the closure value
