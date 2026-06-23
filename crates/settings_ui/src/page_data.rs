@@ -435,20 +435,30 @@ fn general_page(cx: &App) -> SettingsPage {
                 ),
                 metadata: None,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                files: USER,
-                title: "Settings Profiles",
-                description: "Any number of settings profiles that are temporarily applied on top of your existing user settings.",
-                field: Box::new(
-                    SettingField {
-                        organization_override: None,
-                        json_path: Some("settings_profiles"),
-                        pick: |settings_content| Some(settings_content),
-                        write: |_settings_content, _value, _| {},
-                    }
-                    .unimplemented(),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Settings Profiles".into(),
+                description: Some(
+                    "Pick a settings profile to temporarily apply on top of your existing user settings."
+                        .into(),
                 ),
-                metadata: None,
+                button_text: "Choose Profile".into(),
+                on_click: Arc::new(|settings_window, window, cx| {
+                    let Some(original_window) = settings_window.original_window else {
+                        return;
+                    };
+                    original_window
+                        .update(cx, |_workspace, original_window, cx| {
+                            original_window.dispatch_action(
+                                zed_actions::settings_profile_selector::Toggle.boxed_clone(),
+                                cx,
+                            );
+                            original_window.activate_window();
+                        })
+                        .ok();
+                    window.remove_window();
+                }),
+                files: USER,
+                always_visible: false,
             }),
         ]
     }
