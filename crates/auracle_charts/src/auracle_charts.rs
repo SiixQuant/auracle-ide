@@ -3,7 +3,7 @@
 //! when there is no series (the engine does not return one yet), and never
 //! synthesises data: it draws exactly the points it is given.
 
-use auracle_chart_layout::{Range, Scale, downsample_stride};
+use auracle_chart_layout::{Range, Scale, downsample_stride, nice_ticks};
 use gpui::{IntoElement, PathBuilder, canvas, point};
 use ui::prelude::*;
 
@@ -53,6 +53,7 @@ impl RenderOnce for EquityChart {
 
         let line_color = cx.theme().colors().text_accent;
         let area_color = line_color.opacity(0.10);
+        let grid_color = cx.theme().colors().border_variant;
         let height = px(160.);
 
         let first = points.first().map(|p| p.1).unwrap_or(0.0);
@@ -68,13 +69,28 @@ impl RenderOnce for EquityChart {
                 let ys: Vec<f64> = points.iter().map(|p| p.1).collect();
                 let x_scale =
                     Scale::new(Range::from_values(&xs).unwrap_or(Range::new(0.0, 1.0)), w);
-                let y_scale =
-                    Scale::new(Range::from_values(&ys).unwrap_or(Range::new(0.0, 1.0)), h);
+                let y_range = Range::from_values(&ys).unwrap_or(Range::new(0.0, 1.0));
+                let y_scale = Scale::new(y_range, h);
                 let keep = downsample_stride(points.len(), w.max(2.0) as usize);
 
                 let origin_x = bounds.origin.x;
                 let origin_y = bounds.origin.y;
                 let baseline = origin_y + px(h as f32);
+
+                // Faint editorial gridlines at "nice" equity levels, behind the
+                // curve — gives a sense of scale without axis clutter.
+                for tick in nice_ticks(y_range, 4) {
+                    if tick < y_range.min || tick > y_range.max {
+                        continue;
+                    }
+                    let y = origin_y + px((h - y_scale.to_pixel(tick)) as f32);
+                    let mut gridline = PathBuilder::stroke(px(1.));
+                    gridline.move_to(point(origin_x, y));
+                    gridline.line_to(point(origin_x + px(w as f32), y));
+                    if let Ok(path) = gridline.build() {
+                        window.paint_path(path, grid_color);
+                    }
+                }
                 // Equity rises upward, so invert the y pixel (screen y grows down).
                 let screen = |i: usize| {
                     let (t, v) = points[i];
