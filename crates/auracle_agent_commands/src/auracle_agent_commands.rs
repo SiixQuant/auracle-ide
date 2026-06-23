@@ -52,104 +52,59 @@ actions!(
     ]
 );
 
-/// A command-palette preset: the thread title shown to the user and the request
-/// text auto-submitted to the agent. One shape for all native Auracle commands.
-struct AgentPrompt {
-    title: &'static str,
-    text: &'static str,
-}
-
-const RESEARCH_IDEAS: AgentPrompt = AgentPrompt {
-    title: "Research ideas",
-    text: "Scan recent arXiv papers on futures trading, term \
+const RESEARCH_IDEAS: &str = "Scan recent arXiv papers on futures trading, term \
 structure, carry, and trend-following / CTA systems using the research_scan tool. \
 Return the most relevant papers with their abstracts, then synthesize at least \
 three concrete futures-trading-system ideas I could backtest in Auracle, and \
-write them up as a markdown research note.",
-};
+write them up as a markdown research note.";
 
-const RUN_BACKTEST: AgentPrompt = AgentPrompt {
-    title: "Run backtest",
-    text: "List the available strategies, ask me which one to \
+const RUN_BACKTEST: &str = "List the available strategies, ask me which one to \
 test, then run a full vectorized backtest. Show the Sharpe ratio, maximum \
-drawdown, total return, and the final target-weight vector.",
-};
+drawdown, total return, and the final target-weight vector.";
 
-const WALK_FORWARD: AgentPrompt = AgentPrompt {
-    title: "Walk-forward test",
-    text: "Run an out-of-sample rolling walk-forward backtest \
+const WALK_FORWARD: &str = "Run an out-of-sample rolling walk-forward backtest \
 with a train/test split using the run_walkforward tool. Show per-fold Sharpe and \
 return, then give a one-sentence regime diagnosis summarising the aggregate \
-out-of-sample win-rate and mean Sharpe.",
-};
+out-of-sample win-rate and mean Sharpe.";
 
-const PRE_MARKET_CHECK: AgentPrompt = AgentPrompt {
-    title: "Pre-market check",
-    text: "Run a one-shot readiness check with the \
+const PRE_MARKET_CHECK: &str = "Run a one-shot readiness check with the \
 premarket_check tool: broker connectivity, net liquidation value, current \
 positions, open orders, and the last 24 hours of job outcomes. Put any failures \
-at the top.",
-};
+at the top.";
 
-const OPEN_TEARSHEET: AgentPrompt = AgentPrompt {
-    title: "Open tearsheet",
-    text: "List the 10 most recent jobs. Ask me which one to \
+const OPEN_TEARSHEET: &str = "List the 10 most recent jobs. Ask me which one to \
 open, then show its full summary: status, timing, any error message, and a \
-plain-English account of what happened and why.",
-};
+plain-English account of what happened and why.";
 
-const BROWSE_TEMPLATES: AgentPrompt = AgentPrompt {
-    title: "Browse templates",
-    text: "List all bundled example strategies with their \
+const BROWSE_TEMPLATES: &str = "List all bundled example strategies with their \
 titles and a one-sentence summary of each. Ask me which one I'd like to see in \
-detail.",
-};
+detail.";
 
-const CLONE_TEMPLATE: AgentPrompt = AgentPrompt {
-    title: "Clone template",
-    text: "List the bundled example strategies. Ask me which \
+const CLONE_TEMPLATE: &str = "List the bundled example strategies. Ask me which \
 one to clone, then copy it into strategies/ as a new class and show me the file \
-path and strategy path so I can run a backtest right away.",
-};
+path and strategy path so I can run a backtest right away.";
 
-const RUN_PREFLIGHT: AgentPrompt = AgentPrompt {
-    title: "Run preflight",
-    text: "List the available strategies and ask which one to \
+const RUN_PREFLIGHT: &str = "List the available strategies and ask which one to \
 check. Run pre-flight validation (code imports, universe data availability, \
-broker auth, license tier) and show a pass / warn / fail verdict for each check.",
-};
+broker auth, license tier) and show a pass / warn / fail verdict for each check.";
 
-const INGEST_DATA: AgentPrompt = AgentPrompt {
-    title: "Ingest data",
-    text: "Ask me for a symbol, exchange, and date range, then \
+const INGEST_DATA: &str = "Ask me for a symbol, exchange, and date range, then \
 download and store the daily OHLCV bars into the Auracle database. Confirm how \
-many bars were inserted.",
-};
+many bars were inserted.";
 
-const DRAFT_MANIFEST: AgentPrompt = AgentPrompt {
-    title: "Draft manifest",
-    text: "List the available strategies and brokers, ask me \
+const DRAFT_MANIFEST: &str = "List the available strategies and brokers, ask me \
 which to use, then draft a deployment manifest with sensible defaults for the \
-cron schedule, risk limits, and position sizing. Flag any validation issues.",
-};
+cron schedule, risk limits, and position sizing. Flag any validation issues.";
 
-const VALIDATE_MANIFEST: AgentPrompt = AgentPrompt {
-    title: "Validate manifest",
-    text: "Ask me which manifest file to validate, then \
+const VALIDATE_MANIFEST: &str = "Ask me which manifest file to validate, then \
 check its structure, broker registration, universe coverage, and risk settings. \
-List every issue you find with a concrete fix.",
-};
+List every issue you find with a concrete fix.";
 
-const BACKTEST_MANIFEST: AgentPrompt = AgentPrompt {
-    title: "Backtest manifest",
-    text: "Ask me for a manifest file path, then run its \
+const BACKTEST_MANIFEST: &str = "Ask me for a manifest file path, then run its \
 strategy as a vectorized backtest with no live or paper broker call. Show the \
-target weights and performance stats.",
-};
+target weights and performance stats.";
 
-const PROPOSE_AND_PROVE: AgentPrompt = AgentPrompt {
-    title: "Propose and prove",
-    text: "Take the strategy in the active editor (or ask \
+const PROPOSE_AND_PROVE: &str = "Take the strategy in the active editor (or ask \
 me which one). Propose two or three concrete variations — a different parameter \
 value, an added exit rule, or a simpler signal. For EACH variation, run a \
 backtest AND a rolling out-of-sample walk-forward using the backtest and \
@@ -158,63 +113,59 @@ strategy: in-sample Sharpe, out-of-sample Sharpe, max drawdown, and turnover. \
 Recommend at most one change, and ONLY if it improves out-of-sample robustness — \
 never recommend something that just looks better in-sample. Do not edit my file \
 or deploy anything: show the comparison and the exact diff you would apply, and \
-let me approve it.",
-};
+let me approve it.";
 
-const START_INTERVIEW: AgentPrompt = AgentPrompt {
-    title: "Start interview",
-    text: "Run a short strategy intake, then build me \
+const START_INTERVIEW: &str = "Run a short strategy intake, then build me \
 something real. Ask me at most two quick questions — what markets I follow and \
 how often I want to trade — then propose one concrete, defensible strategy idea, \
 write it as a one-file strategy with a `# %%spec` header that compiles to a \
 Strategy subclass, and run a fast backtest so I can see an equity curve. Stay \
 honest: if the edge looks weak out-of-sample, say so plainly. I can refine it by \
-chat from there.",
-};
+chat from there.";
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|ws, _: &ResearchIdeas, window, cx| {
-            run_prompt(ws, &RESEARCH_IDEAS, window, cx);
+            run_prompt(ws, "Research ideas", RESEARCH_IDEAS, window, cx);
         });
         workspace.register_action(|ws, _: &RunBacktest, window, cx| {
-            run_prompt(ws, &RUN_BACKTEST, window, cx);
+            run_prompt(ws, "Run backtest", RUN_BACKTEST, window, cx);
         });
         workspace.register_action(|ws, _: &WalkForward, window, cx| {
-            run_prompt(ws, &WALK_FORWARD, window, cx);
+            run_prompt(ws, "Walk-forward test", WALK_FORWARD, window, cx);
         });
         workspace.register_action(|ws, _: &PreMarketCheck, window, cx| {
-            run_prompt(ws, &PRE_MARKET_CHECK, window, cx);
+            run_prompt(ws, "Pre-market check", PRE_MARKET_CHECK, window, cx);
         });
         workspace.register_action(|ws, _: &OpenTearsheet, window, cx| {
-            run_prompt(ws, &OPEN_TEARSHEET, window, cx);
+            run_prompt(ws, "Open tearsheet", OPEN_TEARSHEET, window, cx);
         });
         workspace.register_action(|ws, _: &BrowseTemplates, window, cx| {
-            run_prompt(ws, &BROWSE_TEMPLATES, window, cx);
+            run_prompt(ws, "Browse templates", BROWSE_TEMPLATES, window, cx);
         });
         workspace.register_action(|ws, _: &CloneTemplate, window, cx| {
-            run_prompt(ws, &CLONE_TEMPLATE, window, cx);
+            run_prompt(ws, "Clone template", CLONE_TEMPLATE, window, cx);
         });
         workspace.register_action(|ws, _: &RunPreflight, window, cx| {
-            deploy_with_broker_gate(ws, &RUN_PREFLIGHT, window, cx);
+            deploy_with_broker_gate(ws, "Run preflight", RUN_PREFLIGHT, window, cx);
         });
         workspace.register_action(|ws, _: &IngestData, window, cx| {
-            run_prompt(ws, &INGEST_DATA, window, cx);
+            run_prompt(ws, "Ingest data", INGEST_DATA, window, cx);
         });
         workspace.register_action(|ws, _: &DraftManifest, window, cx| {
-            deploy_with_broker_gate(ws, &DRAFT_MANIFEST, window, cx);
+            deploy_with_broker_gate(ws, "Draft manifest", DRAFT_MANIFEST, window, cx);
         });
         workspace.register_action(|ws, _: &ValidateManifest, window, cx| {
-            run_prompt(ws, &VALIDATE_MANIFEST, window, cx);
+            run_prompt(ws, "Validate manifest", VALIDATE_MANIFEST, window, cx);
         });
         workspace.register_action(|ws, _: &BacktestManifest, window, cx| {
-            run_prompt(ws, &BACKTEST_MANIFEST, window, cx);
+            run_prompt(ws, "Backtest manifest", BACKTEST_MANIFEST, window, cx);
         });
         workspace.register_action(|ws, _: &ProposeAndProve, window, cx| {
-            run_prompt(ws, &PROPOSE_AND_PROVE, window, cx);
+            run_prompt(ws, "Propose and prove", PROPOSE_AND_PROVE, window, cx);
         });
         workspace.register_action(|ws, _: &StartInterview, window, cx| {
-            run_prompt(ws, &START_INTERVIEW, window, cx);
+            run_prompt(ws, "Start interview", START_INTERVIEW, window, cx);
         });
     })
     .detach();
@@ -224,7 +175,8 @@ pub fn init(cx: &mut App) {
 /// No-ops if the agent panel isn't present (the engine isn't connected yet).
 fn run_prompt(
     workspace: &mut Workspace,
-    prompt: &AgentPrompt,
+    title: &str,
+    prompt: &str,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -232,7 +184,7 @@ fn run_prompt(
         return;
     };
     panel.update(cx, |panel, cx| {
-        panel.start_auracle_prompt(prompt.title.into(), prompt.text.to_string(), window, cx);
+        panel.start_auracle_prompt(title.into(), prompt.to_string(), window, cx);
     });
 }
 
@@ -244,7 +196,8 @@ fn run_prompt(
 /// the agent's own preflight reports the real state.
 fn deploy_with_broker_gate(
     _workspace: &mut Workspace,
-    prompt: &'static AgentPrompt,
+    title: &'static str,
+    prompt: &'static str,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -254,7 +207,7 @@ fn deploy_with_broker_gate(
         workspace
             .update_in(cx, |workspace, window, cx| {
                 if configured {
-                    run_prompt(workspace, prompt, window, cx);
+                    run_prompt(workspace, title, prompt, window, cx);
                 } else {
                     // No execution broker yet — open the connect wizard so
                     // the user can connect right here, then deploy.
