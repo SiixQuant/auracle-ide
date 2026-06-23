@@ -13,6 +13,14 @@
 //! string, and the robustness verdict never celebrates an in-sample edge whose
 //! out-of-sample behaviour the engine didn't report.
 
+/// One point on the equity curve: an engine timestamp (seconds) and the account
+/// value at that time. Only finite values from the engine ever reach this.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EquityPoint {
+    pub t: f64,
+    pub equity: f64,
+}
+
 /// Parsed in-sample backtest statistics. Every field is optional and is filled
 /// only from a numeric engine value — an absent field stays `None` so the render
 /// layer shows an em-dash rather than a fabricated number.
@@ -26,6 +34,10 @@ pub struct BacktestSummary {
     pub win_rate: Option<f64>,
     pub turnover: Option<f64>,
     pub num_trades: Option<u64>,
+    /// The equity curve, empty when the engine did not include one (it does not
+    /// today). Never synthesised — an absent series stays empty so the chart
+    /// shows its honest "no curve yet" state rather than a fabricated line.
+    pub equity: Vec<EquityPoint>,
 }
 
 impl BacktestSummary {
@@ -35,6 +47,23 @@ impl BacktestSummary {
         let stats = value.get("stats");
         let number = |key: &str| stats.and_then(|s| s.get(key)).and_then(|v| v.as_f64());
         let integer = |key: &str| stats.and_then(|s| s.get(key)).and_then(|v| v.as_u64());
+        // The equity curve (`{ "equity": { "series": [{ "t", "equity" }] } }`) is
+        // not part of today's payload; when absent or non-numeric it stays empty,
+        // never synthesised.
+        let equity = value
+            .get("equity")
+            .and_then(|e| e.get("series"))
+            .and_then(|s| s.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let t = row.get("t")?.as_f64()?;
+                        let equity = row.get("equity")?.as_f64()?;
+                        (t.is_finite() && equity.is_finite()).then_some(EquityPoint { t, equity })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             strategy: strategy.into(),
             net_profit: number("net_profit"),
@@ -44,6 +73,7 @@ impl BacktestSummary {
             win_rate: number("win_rate"),
             turnover: number("turnover"),
             num_trades: integer("num_trades"),
+            equity,
         }
     }
 
@@ -286,6 +316,33 @@ mod tests {
         assert_eq!(summary.net_profit, None);
         assert_eq!(summary.max_drawdown, None);
         assert!(!summary.is_empty());
+    }
+
+    #[test]
+    fn equity_series_is_parsed_when_present_and_empty_otherwise() {
+        // Absent today: stays empty, never synthesised.
+        let bare = BacktestSummary::from_engine("Gap", &serde_json::json!({ "stats": {} }));
+        assert!(bare.equity.is_empty());
+
+        // Present + finite: parsed in order; non-finite/malformed points dropped.
+        let value = serde_json::json!({
+            "equity": { "series": [
+                { "t": 1.0, "equity": 100.0 },
+                { "t": 2.0, "equity": 101.5 },
+                { "t": 3.0, "equity": "nope" },
+                { "t": 4.0 }
+            ] }
+        });
+        let summary = BacktestSummary::from_engine("Gap", &value);
+        assert_eq!(summary.equity.len(), 2);
+        assert_eq!(
+            summary.equity[0],
+            EquityPoint {
+                t: 1.0,
+                equity: 100.0
+            }
+        );
+        assert_eq!(summary.equity[1].equity, 101.5);
     }
 
     #[test]

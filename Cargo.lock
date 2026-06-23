@@ -1405,6 +1405,7 @@ version = "0.1.0"
 name = "auracle_backtest_results"
 version = "0.1.0"
 dependencies = [
+ "auracle_charts",
  "auracle_connections",
  "auracle_deploy_gate",
  "auracle_studio_results",
@@ -1418,6 +1419,15 @@ dependencies = [
 [[package]]
 name = "auracle_chart_layout"
 version = "0.1.0"
+
+[[package]]
+name = "auracle_charts"
+version = "0.1.0"
+dependencies = [
+ "auracle_chart_layout",
+ "gpui",
+ "ui",
+]
 
 [[package]]
 name = "auracle_cockpit"

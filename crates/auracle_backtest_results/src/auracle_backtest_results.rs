@@ -438,6 +438,15 @@ impl Render for BacktestResultsView {
             )
             .child(self.render_summary())
             .child(self.render_diagnostics(cx))
+            .when(!self.summary.equity.is_empty(), |this| {
+                this.child(auracle_charts::EquityChart::new(
+                    self.summary
+                        .equity
+                        .iter()
+                        .map(|p| (p.t, p.equity))
+                        .collect(),
+                ))
+            })
             .child(self.render_deploy_bar(cx))
     }
 }
