@@ -19,6 +19,7 @@ members = [
     "crates/auracle_agent_commands",
     "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
+    "crates/auracle_chart_layout",
     "crates/auracle_cockpit",
     "crates/auracle_cockpit_state",
     "crates/auracle_connect",
@@ -26,6 +27,7 @@ members = [
     "crates/auracle_connections",
     "crates/auracle_data_sources",
     "crates/auracle_deploy_gate",
+    "crates/auracle_desk",
     "crates/auracle_feeds",
     "crates/auracle_onboarding",
     "crates/auracle_pill",
@@ -464,6 +466,7 @@ auracle_account = { path = "crates/auracle_account" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_ai_settings = { path = "crates/auracle_ai_settings" }
 auracle_backtest_results = { path = "crates/auracle_backtest_results" }
+auracle_chart_layout = { path = "crates/auracle_chart_layout" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
 auracle_cockpit_state = { path = "crates/auracle_cockpit_state" }
 auracle_connect = { path = "crates/auracle_connect" }
@@ -471,6 +474,7 @@ auracle_connect_state = { path = "crates/auracle_connect_state" }
 auracle_connections = { path = "crates/auracle_connections" }
 auracle_data_sources = { path = "crates/auracle_data_sources" }
 auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
+auracle_desk = { path = "crates/auracle_desk" }
 auracle_feeds = { path = "crates/auracle_feeds" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
 auracle_pill = { path = "crates/auracle_pill" }

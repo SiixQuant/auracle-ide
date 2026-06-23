@@ -1415,6 +1415,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_chart_layout"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_cockpit"
 version = "0.1.0"
 dependencies = [
@@ -1491,6 +1495,10 @@ dependencies = [
  "auracle_connections",
  "http_client",
 ]
+
+[[package]]
+name = "auracle_desk"
+version = "0.1.0"
 
 [[package]]
 name = "auracle_feeds"
