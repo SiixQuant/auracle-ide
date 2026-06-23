@@ -1512,6 +1512,22 @@ name = "auracle_desk"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_desk_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "auracle_desk",
+ "auracle_view_state",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_feeds"
 version = "0.1.0"
 
@@ -23215,6 +23231,7 @@ dependencies = [
  "auracle_cockpit",
  "auracle_connect",
  "auracle_connections",
+ "auracle_desk_panel",
  "auracle_onboarding",
  "auracle_status",
  "auto_update",

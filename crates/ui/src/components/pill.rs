@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use gpui::{AnyView, Hsla, IntoElement, ParentElement, Styled};
+use gpui::{Hsla, IntoElement, ParentElement, Styled};
 
 /// The three Runway progress tones a [`Pill`] can take. Kept here in `ui` so any
 /// crate can map its own state enum to a pill tone without depending on theme
@@ -31,7 +31,6 @@ enum PillPaint {
 pub struct Pill {
     label: SharedString,
     paint: PillPaint,
-    tooltip: Option<Box<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>>,
 }
 
 impl Pill {
@@ -41,7 +40,6 @@ impl Pill {
         Self {
             label: label.into(),
             paint: PillPaint::Pastel { fill, ink },
-            tooltip: None,
         }
     }
 
@@ -50,13 +48,7 @@ impl Pill {
         Self {
             label: label.into(),
             paint: PillPaint::Tone(tone),
-            tooltip: None,
         }
-    }
-
-    pub fn tooltip(mut self, tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static) -> Self {
-        self.tooltip = Some(Box::new(tooltip));
-        self
     }
 }
 
@@ -88,6 +80,5 @@ impl RenderOnce for Pill {
                     .color(Color::Custom(ink))
                     .buffer_font(cx),
             )
-            .when_some(self.tooltip, |this, tooltip| this.tooltip(tooltip))
     }
 }
