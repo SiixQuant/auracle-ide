@@ -12,20 +12,11 @@ use ui::prelude::*;
 #[derive(IntoElement)]
 pub struct EquityChart {
     points: Vec<(f64, f64)>,
-    height: Pixels,
 }
 
 impl EquityChart {
     pub fn new(points: Vec<(f64, f64)>) -> Self {
-        Self {
-            points,
-            height: px(160.),
-        }
-    }
-
-    pub fn height(mut self, height: Pixels) -> Self {
-        self.height = height;
-        self
+        Self { points }
     }
 }
 
@@ -39,7 +30,7 @@ impl RenderOnce for EquityChart {
 
         if points.len() < 2 {
             return v_flex()
-                .h(self.height)
+                .h(px(160.))
                 .w_full()
                 .items_center()
                 .justify_center()
@@ -62,7 +53,7 @@ impl RenderOnce for EquityChart {
 
         let line_color = cx.theme().colors().text_accent;
         let area_color = line_color.opacity(0.10);
-        let height = self.height;
+        let height = px(160.);
 
         let first = points.first().map(|p| p.1).unwrap_or(0.0);
         let last = points.last().map(|p| p.1).unwrap_or(0.0);
