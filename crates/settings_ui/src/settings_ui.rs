@@ -1557,6 +1557,12 @@ struct SubPageLink {
     /// Removes the "Edit in settings.json" button from the page.
     in_json: bool,
     files: FileMask,
+    /// User-global Auracle surfaces (account/license, model providers, data
+    /// sources) must stay reachable in every scope, so they are never masked
+    /// out when a project/worktree file is the current scope. See
+    /// [`auracle_settings_nav::item_visible`]. Defaults to `false`, matching
+    /// native scope-masked behavior.
+    always_visible: bool,
     render:
         fn(&SettingsWindow, &ScrollHandle, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
 }
@@ -1574,6 +1580,8 @@ struct ActionLink {
     button_text: SharedString,
     on_click: Arc<dyn Fn(&mut SettingsWindow, &mut Window, &mut App) + Send + Sync>,
     files: FileMask,
+    /// See [`SubPageLink::always_visible`].
+    always_visible: bool,
 }
 
 impl PartialEq for ActionLink {
@@ -2124,19 +2132,41 @@ impl SettingsWindow {
                         any_found_since_last_header = false;
                     }
                     SettingsPageItem::SettingItem(SettingItem { files, .. })
-                    | SettingsPageItem::SubPageLink(SubPageLink { files, .. })
                     | SettingsPageItem::DynamicItem(DynamicItem {
                         discriminant: SettingItem { files, .. },
                         ..
                     }) => {
-                        if !files.contains(current_file) {
+                        if !auracle_settings_nav::item_visible(files.0 as u32, current_file.0 as u32, false) {
                             page_filter[index] = false;
                         } else {
                             any_found_since_last_header = true;
                         }
                     }
-                    SettingsPageItem::ActionLink(ActionLink { files, .. }) => {
-                        if !files.contains(current_file) {
+                    SettingsPageItem::SubPageLink(SubPageLink {
+                        files,
+                        always_visible,
+                        ..
+                    }) => {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            *always_visible,
+                        ) {
+                            page_filter[index] = false;
+                        } else {
+                            any_found_since_last_header = true;
+                        }
+                    }
+                    SettingsPageItem::ActionLink(ActionLink {
+                        files,
+                        always_visible,
+                        ..
+                    }) => {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            *always_visible,
+                        ) {
                             page_filter[index] = false;
                         } else {
                             any_found_since_last_header = true;
@@ -4121,6 +4151,7 @@ impl SettingsWindow {
             json_path,
             in_json: true,
             files: USER,
+            always_visible: false,
             render,
         };
         self.push_sub_page(sub_page_link, section_header.into(), window, cx);
@@ -4178,6 +4209,7 @@ impl SettingsWindow {
             json_path: None,
             in_json: false,
             files: USER | PROJECT,
+            always_visible: false,
             render: pages::render_skill_creator_page,
         };
 

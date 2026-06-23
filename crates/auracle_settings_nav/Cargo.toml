@@ -1,0 +1,15 @@
+[package]
+name = "auracle_settings_nav"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/auracle_settings_nav.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]

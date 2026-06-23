@@ -1529,6 +1529,10 @@ name = "auracle_schedules"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_settings_nav"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_spec_compiler"
 version = "0.1.0"
 
@@ -16871,6 +16875,7 @@ dependencies = [
  "auracle_ai_settings",
  "auracle_connections",
  "auracle_data_sources",
+ "auracle_settings_nav",
  "auracle_view_state",
  "cloud_api_types",
  "codestral",

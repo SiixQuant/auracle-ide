@@ -99,6 +99,7 @@ fn connections_page() -> SettingsPage {
                 ),
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_account_page,
             }),
             SettingsPageItem::SectionHeader("Broker connections"),
@@ -126,6 +127,7 @@ fn connections_page() -> SettingsPage {
                     window.remove_window();
                 }),
                 files: USER,
+                always_visible: true,
             }),
             SettingsPageItem::SectionHeader("Data sources"),
             SettingsPageItem::SubPageLink(SubPageLink {
@@ -139,6 +141,7 @@ fn connections_page() -> SettingsPage {
                 ),
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_data_sources_page,
             }),
         ]
@@ -161,6 +164,7 @@ fn developer_page(cx: &App) -> SettingsPage {
             json_path: Some("feature_flags"),
             in_json: true,
             files: USER,
+            always_visible: false,
             render: crate::pages::render_feature_flags_page,
         }));
     }
@@ -1487,6 +1491,7 @@ fn keymap_page() -> SettingsPage {
                     window.remove_window();
                 }),
                 files: USER,
+                always_visible: false,
             }),
         ]
     }
@@ -3381,6 +3386,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                     json_path: Some(link.leak()),
                     in_json: true,
                     files: USER | PROJECT,
+                    always_visible: false,
                     render: |this, scroll_handle, window, cx| {
                         let items: Box<[SettingsPageItem]> = concat_sections!(
                             language_settings_data(),
@@ -7832,6 +7838,7 @@ fn collaboration_page() -> SettingsPage {
                     open_audio_test_window(window, cx);
                 }),
                 files: USER,
+                always_visible: false,
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Output Audio Device",
@@ -7935,6 +7942,7 @@ fn ai_page() -> SettingsPage {
                 description: Some("View and manage agent skills installed globally or in project worktrees.".into()),
                 in_json: false,
                 files: USER | PROJECT,
+                always_visible: false,
                 render: render_skills_setup_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
@@ -7944,6 +7952,7 @@ fn ai_page() -> SettingsPage {
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
                 in_json: true,
                 files: USER,
+                always_visible: false,
                 render: render_tool_permissions_setup_page,
             }),
         ];
@@ -8342,6 +8351,7 @@ fn ai_page() -> SettingsPage {
                 // settings.json, so there's nothing to "Edit in settings.json".
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_ai_providers_page,
             }),
         ]
@@ -10187,6 +10197,7 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             description: Some("Set up different edit prediction providers in complement to Auracle's built-in prediction model.".into()),
             in_json: false,
             files: USER,
+            always_visible: false,
             render: render_edit_prediction_setup_page
         }),
         SettingsPageItem::SettingItem(SettingItem {
