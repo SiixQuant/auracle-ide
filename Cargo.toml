@@ -28,6 +28,7 @@ members = [
     "crates/auracle_deploy_gate",
     "crates/auracle_feeds",
     "crates/auracle_onboarding",
+    "crates/auracle_pill",
     "crates/auracle_runway",
     "crates/auracle_spec_compiler",
     "crates/auracle_status",
@@ -472,6 +473,7 @@ auracle_data_sources = { path = "crates/auracle_data_sources" }
 auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_feeds = { path = "crates/auracle_feeds" }
 auracle_onboarding = { path = "crates/auracle_onboarding" }
+auracle_pill = { path = "crates/auracle_pill" }
 auracle_runway = { path = "crates/auracle_runway" }
 auracle_spec_compiler = { path = "crates/auracle_spec_compiler" }
 auracle_status = { path = "crates/auracle_status" }
