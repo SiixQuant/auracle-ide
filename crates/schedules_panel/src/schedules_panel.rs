@@ -106,22 +106,12 @@ impl SchedulesPanel {
     }
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_schedules(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        this.apply_fetch(fetched);
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
-                }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+        auracle_connect::spawn_periodic_fetch(
+            cx,
+            POLL_EVERY,
+            fetch_schedules,
+            |this, fetched, _cx| this.apply_fetch(fetched),
+        )
     }
 
     /// Fold a fetch outcome into the list state. A poll failure replaces the
@@ -148,14 +138,8 @@ impl SchedulesPanel {
     fn refetch(&mut self, cx: &mut Context<Self>) {
         self.schedules = Load::Pending;
         cx.notify();
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let fetched = fetch_schedules(http).await;
-            this.update(cx, |this, cx| {
-                this.apply_fetch(fetched);
-                cx.notify();
-            })
-            .ok();
+        auracle_connect::spawn_fetch_once(cx, fetch_schedules, |this, fetched, _cx| {
+            this.apply_fetch(fetched)
         })
         .detach();
     }

@@ -475,26 +475,19 @@ impl OnboardingWizard {
     }
 
     fn current_body(&self, cx: &App) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
+        // Read the typed text out of the editors here (the only place that needs
+        // `cx`), then hand the plain values to the pure, unit-tested body builder
+        // so the select-only / skip-empty rules live in one place.
+        let mut text_entries = std::collections::HashMap::new();
         for (index, field) in self.fields.iter().enumerate() {
             if field.kind == "select" {
-                if let Some(choice) = self.selections.get(&field.name) {
-                    map.insert(
-                        field.name.clone(),
-                        serde_json::Value::String(choice.clone()),
-                    );
-                }
                 continue;
             }
-            if index >= self.editors.len() {
-                continue;
-            }
-            let value = self.editors[index].read(cx).text(cx);
-            if !value.is_empty() {
-                map.insert(field.name.clone(), serde_json::Value::String(value));
+            if let Some(editor) = self.editors.get(index) {
+                text_entries.insert(field.name.clone(), editor.read(cx).text(cx));
             }
         }
-        serde_json::Value::Object(map)
+        auracle_connections::build_connection_body(&self.fields, &self.selections, &text_entries)
     }
 
     fn run_broker_test(&mut self, cx: &mut Context<Self>) {

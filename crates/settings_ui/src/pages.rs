@@ -7,6 +7,7 @@ mod connections_setup;
 mod data_sources_setup;
 mod edit_prediction_provider_setup;
 mod feature_flags;
+mod page_helpers;
 mod skill_creator;
 mod skills_setup;
 mod tool_permissions_setup;

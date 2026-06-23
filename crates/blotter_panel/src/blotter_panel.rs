@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use auracle_feeds::{FeedTone, is_cancellable, order_tone};
+use auracle_feeds::{is_cancellable, order_tone};
 use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
@@ -171,7 +171,7 @@ impl BlotterPanel {
         // The status -> tone decision lives in `auracle_feeds::order_tone`
         // (gpui-free, unit-tested); this method only maps that tone to a theme
         // colour, so the render path holds no colour literals.
-        tone_color(order_tone(status), cx)
+        auracle_connect::tone_to_color(order_tone(status), cx)
     }
 
     fn cancel_order(&mut self, order_id: SharedString, cx: &mut Context<Self>) {
@@ -321,24 +321,6 @@ fn render_error(message: &str, retryable: bool, cx: &mut Context<BlotterPanel>) 
             )
         })
         .into_any_element()
-}
-
-/// Map a feed tone to the theme colour the status dot renders in. Only theme
-/// tokens — never a colour literal — so the panel tracks the active theme.
-/// Mirrors `account_setup::tone_color`, resolved against `StatusColors` here
-/// because the dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
-fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
-    let status = cx.theme().status();
-    match tone {
-        FeedTone::Positive => status.success,
-        FeedTone::Negative => status.error,
-        FeedTone::Ignored => status.ignored,
-        FeedTone::Caution => status.warning,
-        // Info and the neutral default both read as "on its way" — the blotter
-        // never emits Neutral (order_tone falls back to Info), so this is the
-        // honest catch-all for an in-flight order.
-        FeedTone::Info | FeedTone::Neutral => status.info,
-    }
 }
 
 enum FetchResult {

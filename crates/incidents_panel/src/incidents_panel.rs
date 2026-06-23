@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use auracle_feeds::{FeedTone, severity_tone};
+use auracle_feeds::severity_tone;
 use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
@@ -108,22 +108,12 @@ impl IncidentsPanel {
     }
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_incidents(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        this.apply_fetch(fetched);
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
-                }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+        auracle_connect::spawn_periodic_fetch(
+            cx,
+            POLL_EVERY,
+            fetch_incidents,
+            |this, fetched, _cx| this.apply_fetch(fetched),
+        )
     }
 
     /// Apply a fetch outcome to panel state. Shared by the poll and the manual
@@ -157,18 +147,11 @@ impl IncidentsPanel {
     fn refetch(&mut self, cx: &mut Context<Self>) {
         self.status = Status::Loading;
         cx.notify();
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let fetched = fetch_incidents(http).await;
-            // The fetch outcome (incl. an unreachable engine) is applied to UI
-            // state by `apply_fetch` — never silently dropped. The `.ok()` only
-            // tolerates the panel having been closed mid-fetch, matching the
-            // poll/dismiss paths in this file.
-            this.update(cx, |this, cx| {
-                this.apply_fetch(fetched);
-                cx.notify();
-            })
-            .ok();
+        // The fetch outcome (incl. an unreachable engine) is applied to UI state
+        // by `apply_fetch` — never silently dropped — through the same shared
+        // fetch helper the poll uses, so Retry can't drift from the poll path.
+        auracle_connect::spawn_fetch_once(cx, fetch_incidents, |this, fetched, _cx| {
+            this.apply_fetch(fetched)
         })
         .detach();
     }
@@ -177,7 +160,7 @@ impl IncidentsPanel {
         // The severity -> tone decision lives in `auracle_feeds::severity_tone`
         // (gpui-free, unit-tested); this method only maps that tone to a theme
         // colour, so the render path holds no colour literals.
-        tone_color(severity_tone(severity), cx)
+        auracle_connect::tone_to_color(severity_tone(severity), cx)
     }
 
     fn dismiss(&mut self, incident: &Incident, cx: &mut Context<Self>) {
@@ -334,22 +317,6 @@ fn render_error(message: &str, retryable: bool, cx: &mut Context<IncidentsPanel>
             )
         })
         .into_any_element()
-}
-
-/// Map a feed tone to the theme colour the severity dot renders in. Only theme
-/// tokens — never a colour literal — so the panel tracks the active theme.
-/// Mirrors `account_setup::tone_color`, resolved against `StatusColors` here
-/// because the dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
-fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
-    let status = cx.theme().status();
-    match tone {
-        FeedTone::Negative => status.error,
-        FeedTone::Caution => status.warning,
-        // Info and the neutral default both read as informational — incidents
-        // never emit Positive/Ignored/Neutral (severity_tone falls back to
-        // Info), so this is the honest catch-all for an info-level incident.
-        FeedTone::Info | FeedTone::Positive | FeedTone::Ignored | FeedTone::Neutral => status.info,
-    }
 }
 
 enum FetchResult {

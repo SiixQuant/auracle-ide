@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::Result;
-use auracle_feeds::{FeedTone, event_tone};
+use auracle_feeds::event_tone;
 use auracle_view_state::{Load, ViewState};
 use futures::AsyncReadExt as _;
 use gpui::{
@@ -180,7 +180,7 @@ impl RunsDock {
         // The kind -> tone decision lives in `auracle_feeds::event_tone` (gpui-free,
         // unit-tested); this method only maps that tone to a theme colour, so the
         // render path holds no colour literals and the decision stays testable.
-        tone_color(event_tone(kind), cx)
+        auracle_connect::tone_to_color(event_tone(kind), cx)
     }
 
     fn render_rows(&self, rows: &[EventRow], cx: &Context<Self>) -> AnyElement {
@@ -239,22 +239,6 @@ fn render_empty(hint: &str) -> AnyElement {
         .p_3()
         .child(Label::new(hint.to_string()).color(Color::Muted))
         .into_any_element()
-}
-
-/// Map a feed tone to the theme colour the row dot renders in. Only theme tokens
-/// — never a colour literal — so the panel tracks the active theme. Mirrors the
-/// `account_setup::tone_color` shape, resolved against `StatusColors` here because
-/// the runs dot is drawn directly (`bg(Hsla)`) rather than via `Color`.
-fn tone_color(tone: FeedTone, cx: &App) -> Hsla {
-    let status = cx.theme().status();
-    match tone {
-        FeedTone::Negative => status.error,
-        FeedTone::Info => status.info,
-        FeedTone::Caution => status.warning,
-        FeedTone::Positive => status.success,
-        FeedTone::Ignored => status.ignored,
-        FeedTone::Neutral => cx.theme().colors().text_muted,
-    }
 }
 
 async fn run_stream_once(

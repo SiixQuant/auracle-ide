@@ -93,40 +93,29 @@ impl StrategiesPanel {
     }
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_strategies(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.connected = false;
-                                this.strategies = Load::Pending;
-                            }
-                            // A poll failure replaces the list with a designed,
-                            // retryable error rather than silently holding stale
-                            // rows — staleness must be honest (rubric item 3).
-                            FetchResult::Unreachable => {
-                                this.connected = true;
-                                this.strategies = Load::Failed(
-                                    "Your engine didn't answer. It may be stopped.".into(),
-                                );
-                            }
-                            FetchResult::Ok(items) => {
-                                this.connected = true;
-                                this.strategies = Load::Done(items);
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_connect::spawn_periodic_fetch(
+            cx,
+            POLL_EVERY,
+            fetch_strategies,
+            |this, fetched, _cx| match fetched {
+                FetchResult::NotConnected => {
+                    this.connected = false;
+                    this.strategies = Load::Pending;
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                // A poll failure replaces the list with a designed, retryable
+                // error rather than silently holding stale rows — staleness must
+                // be honest (rubric item 3).
+                FetchResult::Unreachable => {
+                    this.connected = true;
+                    this.strategies =
+                        Load::Failed("Your engine didn't answer. It may be stopped.".into());
+                }
+                FetchResult::Ok(items) => {
+                    this.connected = true;
+                    this.strategies = Load::Done(items);
+                }
+            },
+        )
     }
 
     /// Resolve a dotted module path to an absolute `.py` file under the
@@ -180,23 +169,17 @@ impl StrategiesPanel {
     fn refetch(&mut self, cx: &mut Context<Self>) {
         self.strategies = Load::Pending;
         cx.notify();
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let fetched = fetch_strategies(http).await;
-            this.update(cx, |this, cx| {
-                this.strategies = match fetched {
-                    FetchResult::NotConnected => {
-                        this.connected = false;
-                        Load::Pending
-                    }
-                    FetchResult::Unreachable => {
-                        Load::Failed("Your engine didn't answer. It may be stopped.".into())
-                    }
-                    FetchResult::Ok(items) => Load::Done(items),
-                };
-                cx.notify();
-            })
-            .ok();
+        auracle_connect::spawn_fetch_once(cx, fetch_strategies, |this, fetched, _cx| {
+            this.strategies = match fetched {
+                FetchResult::NotConnected => {
+                    this.connected = false;
+                    Load::Pending
+                }
+                FetchResult::Unreachable => {
+                    Load::Failed("Your engine didn't answer. It may be stopped.".into())
+                }
+                FetchResult::Ok(items) => Load::Done(items),
+            };
         })
         .detach();
     }

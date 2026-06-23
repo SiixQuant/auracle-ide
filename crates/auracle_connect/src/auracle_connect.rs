@@ -23,13 +23,91 @@ use auracle_connect_state::{
 };
 use futures::AsyncReadExt as _;
 use gpui::{
-    App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Global, SharedString, Task,
-    Window, actions,
+    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Global, SharedString,
+    Task, WeakEntity, Window, actions,
 };
 use serde::{Deserialize, Serialize};
 use ui::{CommonAnimationExt as _, Modal, ModalFooter, ModalHeader, prelude::*};
 use util::ResultExt as _;
 use workspace::{ModalView, Workspace};
+
+pub use auracle_feeds::FeedTone;
+
+/// Map a feed-row [`FeedTone`] to a theme colour. The kind/status/severity ->
+/// tone decision lives in `auracle_feeds` (gpui-free, unit-tested); this is the
+/// one render-side place that turns a tone into a colour, so the feed panels
+/// (runs dock, blotter, incidents) hold no colour literals and share one map.
+/// Each tone gets its semantic theme token; a panel whose feed can't emit a
+/// given tone simply never hits that arm.
+pub fn tone_to_color(tone: FeedTone, cx: &App) -> gpui::Hsla {
+    let status = cx.theme().status();
+    match tone {
+        FeedTone::Negative => status.error,
+        FeedTone::Info => status.info,
+        FeedTone::Caution => status.warning,
+        FeedTone::Positive => status.success,
+        FeedTone::Ignored => status.ignored,
+        FeedTone::Neutral => cx.theme().colors().text_muted,
+    }
+}
+
+/// Fetch once, off-thread, then fold the outcome into the view via `apply`.
+/// `apply` runs on the foreground thread and is the only place that touches
+/// view state, so the per-surface honesty/staleness rules stay local while the
+/// spawn/`WeakEntity`/notify plumbing is shared. The `.ok()` only tolerates the
+/// view being dropped mid-fetch. Returns the [`Task`] so the caller decides its
+/// lifetime (a one-shot Retry detaches it; a poll awaits it in its loop).
+pub fn spawn_fetch_once<T, Fut, R>(
+    cx: &mut Context<T>,
+    fetch: impl FnOnce(Arc<dyn http_client::HttpClient>) -> Fut + 'static,
+    apply: impl FnOnce(&mut T, R, &mut Context<T>) + 'static,
+) -> Task<()>
+where
+    T: 'static,
+    Fut: std::future::Future<Output = R> + 'static,
+{
+    let http = cx.http_client();
+    cx.spawn(async move |this: WeakEntity<T>, cx| {
+        let fetched = fetch(http).await;
+        this.update(cx, |this, cx| {
+            apply(this, fetched, cx);
+            cx.notify();
+        })
+        .ok();
+    })
+}
+
+/// Poll `fetch` every `every`, folding each outcome into the view through
+/// `apply` (see [`spawn_fetch_once`]) until the view is dropped — the shared
+/// background-refresh loop behind the live panels. `fetch` is `Fn` so it can
+/// run each tick; the timer uses GPUI's executor so tests can drive it.
+pub fn spawn_periodic_fetch<T, Fut, R>(
+    cx: &mut Context<T>,
+    every: std::time::Duration,
+    fetch: impl Fn(Arc<dyn http_client::HttpClient>) -> Fut + 'static,
+    apply: impl Fn(&mut T, R, &mut Context<T>) + 'static,
+) -> Task<()>
+where
+    T: 'static,
+    Fut: std::future::Future<Output = R> + 'static,
+{
+    let http = cx.http_client();
+    cx.spawn(async move |this: WeakEntity<T>, cx| {
+        loop {
+            let fetched = fetch(http.clone()).await;
+            let alive = this
+                .update(cx, |this, cx| {
+                    apply(this, fetched, cx);
+                    cx.notify();
+                })
+                .is_ok();
+            if !alive {
+                return;
+            }
+            cx.background_executor().timer(every).await;
+        }
+    })
+}
 
 actions!(
     auracle,

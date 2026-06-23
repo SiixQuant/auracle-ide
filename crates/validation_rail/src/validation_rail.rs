@@ -98,40 +98,29 @@ impl ValidationRail {
     }
 
     fn spawn_list_poll(cx: &mut Context<Self>) -> Task<()> {
-        let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_strategies(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            ListResult::NotConnected => {
-                                this.connected = false;
-                                this.strategies = Load::Pending;
-                            }
-                            // A poll failure replaces the picker with a designed,
-                            // retryable error rather than silently holding stale
-                            // rows — staleness must be honest (rubric item 3).
-                            ListResult::Unreachable => {
-                                this.connected = true;
-                                this.strategies = Load::Failed(
-                                    "Your engine didn't answer. It may be stopped.".into(),
-                                );
-                            }
-                            ListResult::Ok(items) => {
-                                this.connected = true;
-                                this.strategies = Load::Done(items);
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_connect::spawn_periodic_fetch(
+            cx,
+            POLL_EVERY,
+            fetch_strategies,
+            |this, fetched, _cx| match fetched {
+                ListResult::NotConnected => {
+                    this.connected = false;
+                    this.strategies = Load::Pending;
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                // A poll failure replaces the picker with a designed, retryable
+                // error rather than silently holding stale rows — staleness must
+                // be honest (rubric item 3).
+                ListResult::Unreachable => {
+                    this.connected = true;
+                    this.strategies =
+                        Load::Failed("Your engine didn't answer. It may be stopped.".into());
+                }
+                ListResult::Ok(items) => {
+                    this.connected = true;
+                    this.strategies = Load::Done(items);
+                }
+            },
+        )
     }
 
     fn select(&mut self, path: SharedString, cx: &mut Context<Self>) {
