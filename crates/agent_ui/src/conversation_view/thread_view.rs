@@ -8612,6 +8612,17 @@ impl ThreadView {
             })
             .overflow_hidden()
             .child(tool_icon)
+            .when_some(
+                tool_call_to_agent_action(&tool_call.status, &tool_call.kind),
+                |this, action| {
+                    let pill = auracle_pill::agent_pill(action);
+                    this.child(ui::Pill::pastel(
+                        pill.label,
+                        pastel_hsla(pill.fill),
+                        pastel_hsla(pill.ink),
+                    ))
+                },
+            )
             .child(if has_location {
                 h_flex()
                     .id(("open-tool-call-location", entry_ix))
@@ -11071,6 +11082,37 @@ fn set_fast_mode_warning_dismissed(
             .log_err();
     })
     .detach();
+}
+
+/// Map a tool call's status + kind to the editorial agent pill it shows, or
+/// `None` for states the card already signals (failed / rejected / awaiting
+/// confirmation). Pure over borrows of the tool call — touches no entity, so it
+/// cannot re-enter an in-progress update.
+fn tool_call_to_agent_action(
+    status: &ToolCallStatus,
+    kind: &acp::ToolKind,
+) -> Option<auracle_pill::AgentAction> {
+    use auracle_pill::AgentAction;
+    match (status, kind) {
+        (ToolCallStatus::Pending, _) => Some(AgentAction::Thinking),
+        (
+            ToolCallStatus::InProgress,
+            acp::ToolKind::Read | acp::ToolKind::Search | acp::ToolKind::Fetch,
+        ) => Some(AgentAction::Reading),
+        (
+            ToolCallStatus::InProgress,
+            acp::ToolKind::Edit | acp::ToolKind::Delete | acp::ToolKind::Move,
+        ) => Some(AgentAction::Editing),
+        (ToolCallStatus::InProgress, acp::ToolKind::Execute) => Some(AgentAction::Running),
+        (ToolCallStatus::InProgress, _) => Some(AgentAction::Thinking),
+        (ToolCallStatus::Completed, _) => Some(AgentAction::Done),
+        _ => None,
+    }
+}
+
+/// Convert a brand pastel RGB triple to a gpui colour.
+fn pastel_hsla(rgb: auracle_pill::Rgb) -> gpui::Hsla {
+    gpui::rgb(((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32).into()
 }
 
 pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {

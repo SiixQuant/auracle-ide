@@ -1,13 +1,11 @@
-//! Decision layer for the editorial timeline pills, shared by the Studio agent
-//! timeline and the Runway rail. gpui-free so it is unit-tested without
-//! rendering; the GPUI layer maps these to painted pills.
+//! Decision layer for the Studio agent timeline's fixed pastel pills (the
+//! editorial signature), scoped to agent action types only. gpui-free so it is
+//! unit-tested without rendering; the GPUI layer converts these to painted pills.
 //!
-//! Two distinct vocabularies, on purpose:
-//! - the Studio AGENT timeline uses the fixed pastel pills (the signature),
-//!   scoped to agent action types only;
-//! - the RUNWAY pipeline reuses the pill *shape* but is coloured by progress
-//!   STATE from the theme (accent/positive/muted), never the pastels — phases
-//!   are progress, not action types, so a rainbow there would be decoration.
+//! The Runway rail reuses the pill *shape* but is coloured by progress STATE
+//! from the theme, never these pastels — phases are progress, not action types.
+//! That tone lives in `ui::PillTone` (mapped from `auracle_runway::StageTone`),
+//! so it is deliberately absent here.
 
 /// A plain 8-bit RGB triple. The agent pastels are fixed brand values (not theme
 /// tokens), so they live here as data the GPUI layer converts to its colour type.
@@ -86,35 +84,6 @@ pub fn agent_pill(action: AgentAction) -> AgentPill {
     }
 }
 
-/// Progress state of a Runway stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunwayState {
-    Current,
-    Done,
-    Upcoming,
-}
-
-/// Theme tone the GPUI layer colours a Runway pill with. Deliberately NOT a
-/// pastel — Runway is progress, so it borrows the theme's brand/semantic tones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunwayTone {
-    /// The active stage — the one scarce accent.
-    Accent,
-    /// A reached stage.
-    Positive,
-    /// A stage not yet reached.
-    Muted,
-}
-
-/// Map a Runway stage's progress state to its pill tone.
-pub fn runway_tone(state: RunwayState) -> RunwayTone {
-    match state {
-        RunwayState::Current => RunwayTone::Accent,
-        RunwayState::Done => RunwayTone::Positive,
-        RunwayState::Upcoming => RunwayTone::Muted,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,21 +130,5 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
-    }
-
-    #[test]
-    fn runway_state_maps_to_progress_tone() {
-        assert_eq!(runway_tone(RunwayState::Current), RunwayTone::Accent);
-        assert_eq!(runway_tone(RunwayState::Done), RunwayTone::Positive);
-        assert_eq!(runway_tone(RunwayState::Upcoming), RunwayTone::Muted);
-    }
-
-    #[test]
-    fn runway_never_borrows_an_agent_pastel() {
-        // Different vocabularies: the Runway tone enum has no pastel at all, so a
-        // stage can never accidentally render as a Cursor agent colour. This test
-        // documents that boundary — RunwayTone and AgentPill share no colour API.
-        let tones = [RunwayTone::Accent, RunwayTone::Positive, RunwayTone::Muted];
-        assert_eq!(tones.len(), 3);
     }
 }

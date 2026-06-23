@@ -451,6 +451,7 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "audio",
+ "auracle_pill",
  "base64 0.22.1",
  "buffer_diff",
  "chrono",

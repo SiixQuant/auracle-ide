@@ -293,6 +293,16 @@ fn tone_color(tone: StageTone) -> Color {
     }
 }
 
+/// Map a [`StageTone`] to the pill tone the rail's stage marker renders. The rail
+/// has no separate disabled wash, so Disabled collapses to Muted.
+fn tone_pill(tone: StageTone) -> ui::PillTone {
+    match tone {
+        StageTone::Accent => ui::PillTone::Accent,
+        StageTone::Positive => ui::PillTone::Positive,
+        StageTone::Muted | StageTone::Disabled => ui::PillTone::Muted,
+    }
+}
+
 impl Render for RunwayRail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The runway truth is only present once a linked engine has answered; in
@@ -389,11 +399,7 @@ impl Render for RunwayRail {
                     .child(Label::new(*name).color(tone_color(marker.name_tone)))
                     .child(div().flex_1())
                     .when_some(marker.label, |row, label| {
-                        row.child(
-                            Label::new(label)
-                                .size(LabelSize::XSmall)
-                                .color(tone_color(marker.mark_tone)),
-                        )
+                        row.child(ui::Pill::tone(label, tone_pill(marker.mark_tone)))
                     })
                     .tooltip(Tooltip::text(tooltip_text))
             }))
