@@ -1182,8 +1182,8 @@ pub fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'a str {
     // and so retained here for backward compatibility.
     match name {
         ".SystemUIFont" => system,
-        ".AuracleSans" | ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
-        ".AuracleMono" | ".ZedMono" | "Zed Plex Mono" => "Lilex",
+        ".AuracleSans" | ".ZedSans" | "Zed Plex Sans" => "Inter",
+        ".AuracleMono" | ".ZedMono" | "Zed Plex Mono" => "JetBrains Mono",
         _ => name,
     }
 }
@@ -1200,10 +1200,10 @@ pub fn font_name_with_fallbacks_shared<'a>(
     match name.as_str() {
         ".SystemUIFont" => system,
         ".AuracleSans" | ".ZedSans" | "Zed Plex Sans" => {
-            const { &SharedString::new_static("IBM Plex Sans") }
+            const { &SharedString::new_static("Inter") }
         }
         ".AuracleMono" | ".ZedMono" | "Zed Plex Mono" => {
-            const { &SharedString::new_static("Lilex") }
+            const { &SharedString::new_static("JetBrains Mono") }
         }
         _ => name,
     }

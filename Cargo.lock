@@ -451,6 +451,7 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "audio",
+ "auracle_pill",
  "base64 0.22.1",
  "buffer_diff",
  "chrono",
@@ -1404,6 +1405,7 @@ version = "0.1.0"
 name = "auracle_backtest_results"
 version = "0.1.0"
 dependencies = [
+ "auracle_charts",
  "auracle_connections",
  "auracle_deploy_gate",
  "auracle_studio_results",
@@ -1412,6 +1414,19 @@ dependencies = [
  "serde_json",
  "ui",
  "workspace",
+]
+
+[[package]]
+name = "auracle_chart_layout"
+version = "0.1.0"
+
+[[package]]
+name = "auracle_charts"
+version = "0.1.0"
+dependencies = [
+ "auracle_chart_layout",
+ "gpui",
+ "ui",
 ]
 
 [[package]]
@@ -1491,6 +1506,10 @@ dependencies = [
  "auracle_connections",
  "http_client",
 ]
+
+[[package]]
+name = "auracle_desk"
+version = "0.1.0"
 
 [[package]]
 name = "auracle_feeds"

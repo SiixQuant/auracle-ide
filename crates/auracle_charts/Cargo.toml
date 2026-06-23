@@ -1,0 +1,17 @@
+[package]
+name = "auracle_charts"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/auracle_charts.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+auracle_chart_layout.workspace = true
+gpui.workspace = true
+ui.workspace = true
