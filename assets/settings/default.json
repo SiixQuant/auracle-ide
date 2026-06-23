@@ -24,7 +24,7 @@
   // 6. "TextMate"
   "base_keymap": "VSCode",
   // The name of a font to use for rendering text in the editor
-  // ".AuracleMono" currently aliases to Lilex
+  // ".AuracleMono" currently aliases to JetBrains Mono
   // but this may change in the future.
   "buffer_font_family": ".AuracleMono",
   // Set the buffer text's font fallbacks, this will be merged with
@@ -52,7 +52,7 @@
   "buffer_line_height": "comfortable",
   // The name of a font to use for rendering text in the UI
   // You can set this to ".SystemUIFont" to use the system font
-  // ".AuracleSans" currently aliases to "IBM Plex Sans", but this may
+  // ".AuracleSans" currently aliases to "Inter", but this may
   // change in the future
   "ui_font_family": ".AuracleSans",
   // Set the UI's font fallbacks, this will be merged with the platform's
