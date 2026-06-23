@@ -910,6 +910,35 @@ pub struct SettingsWindow {
     /// and cleared when it is popped (the views can't be rebuilt per render
     /// without dropping editor focus while a user types a key).
     ai_providers_page: Option<Entity<pages::AiProvidersPage>>,
+    /// The live "Connect a broker" sub-page entity. Holds the credential editors
+    /// (whose focus must survive re-renders), so — like `ai_providers_page` —
+    /// it is built when the sub-page is pushed and cleared when it is popped.
+    broker_connect_page: Option<Entity<auracle_connections::BrokerWizard>>,
+    /// Keeps the broker-connect page's `DismissEvent` subscription alive (it pops
+    /// the sub-page once a connection saves). Dropped with the page on pop.
+    broker_connect_subscription: Option<Subscription>,
+    /// State for the native "Agent rules" sub-page, resolved asynchronously when
+    /// the page is pushed (the prompt store loads async and `AGENTS.md` existence
+    /// is an async `fs` stat) and cleared when it is popped. `None` until ready;
+    /// while `None` the page reports the rules library as still loading rather
+    /// than claiming zero rules. Backs [`pages::render_agent_rules_page`].
+    agent_rules: Option<AgentRulesState>,
+}
+
+/// Resolved inputs for the "Agent rules" sub-page render, gathered once when the
+/// page is pushed so the render stays synchronous and gpui-free decisions defer
+/// to the reducer. Nothing here is fabricated: the booleans come from real `fs`
+/// stats and the store handle is the live prompt store.
+pub(crate) struct AgentRulesState {
+    /// Whether the user-global `AGENTS.md` exists on disk.
+    pub(crate) global_file_exists: bool,
+    /// The first worktree's `AGENTS.md` absolute path, if a worktree is open.
+    pub(crate) project_path: Option<std::path::PathBuf>,
+    /// Whether that project `AGENTS.md` exists on disk.
+    pub(crate) project_file_exists: bool,
+    /// The live prompt store (reusable rules library); `None` if it failed to
+    /// resolve, which the page reports honestly.
+    pub(crate) prompt_store: Option<Entity<prompt_store::PromptStore>>,
 }
 
 struct SearchDocument {
@@ -1542,6 +1571,16 @@ enum SubPageType {
     /// backing entity (which caches live provider configuration views) is built
     /// when the page is pushed and dropped when it is popped.
     AiProviders,
+    /// The native "Connect a broker" sub-page on the Connections page. Tagged so
+    /// its backing entity (which holds the credential editors whose focus must
+    /// survive re-renders) is built when the page is pushed and dropped when it
+    /// is popped — mirroring [`SubPageType::AiProviders`].
+    BrokerConnect,
+    /// The native "Agent rules" sub-page on the AI page. Tagged so the real
+    /// prompt store (Zed's reusable rules library) is resolved when the page is
+    /// pushed — letting the render read its rule metadata synchronously — and the
+    /// cached handle is dropped when the page is popped.
+    AgentRules,
     #[default]
     Other,
 }
@@ -1557,6 +1596,12 @@ struct SubPageLink {
     /// Removes the "Edit in settings.json" button from the page.
     in_json: bool,
     files: FileMask,
+    /// User-global Auracle surfaces (account/license, model providers, data
+    /// sources) must stay reachable in every scope, so they are never masked
+    /// out when a project/worktree file is the current scope. See
+    /// [`auracle_settings_nav::item_visible`]. Defaults to `false`, matching
+    /// native scope-masked behavior.
+    always_visible: bool,
     render:
         fn(&SettingsWindow, &ScrollHandle, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
 }
@@ -1574,6 +1619,8 @@ struct ActionLink {
     button_text: SharedString,
     on_click: Arc<dyn Fn(&mut SettingsWindow, &mut Window, &mut App) + Send + Sync>,
     files: FileMask,
+    /// See [`SubPageLink::always_visible`].
+    always_visible: bool,
 }
 
 impl PartialEq for ActionLink {
@@ -1895,6 +1942,9 @@ impl SettingsWindow {
             shared_settings: auracle_view_state::Load::Pending,
             shared_settings_task: None,
             ai_providers_page: None,
+            broker_connect_page: None,
+            broker_connect_subscription: None,
+            agent_rules: None,
         };
 
         this.fetch_files(window, cx);
@@ -2124,19 +2174,45 @@ impl SettingsWindow {
                         any_found_since_last_header = false;
                     }
                     SettingsPageItem::SettingItem(SettingItem { files, .. })
-                    | SettingsPageItem::SubPageLink(SubPageLink { files, .. })
                     | SettingsPageItem::DynamicItem(DynamicItem {
                         discriminant: SettingItem { files, .. },
                         ..
                     }) => {
-                        if !files.contains(current_file) {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            false,
+                        ) {
                             page_filter[index] = false;
                         } else {
                             any_found_since_last_header = true;
                         }
                     }
-                    SettingsPageItem::ActionLink(ActionLink { files, .. }) => {
-                        if !files.contains(current_file) {
+                    SettingsPageItem::SubPageLink(SubPageLink {
+                        files,
+                        always_visible,
+                        ..
+                    }) => {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            *always_visible,
+                        ) {
+                            page_filter[index] = false;
+                        } else {
+                            any_found_since_last_header = true;
+                        }
+                    }
+                    SettingsPageItem::ActionLink(ActionLink {
+                        files,
+                        always_visible,
+                        ..
+                    }) => {
+                        if !auracle_settings_nav::item_visible(
+                            files.0 as u32,
+                            current_file.0 as u32,
+                            *always_visible,
+                        ) {
                             page_filter[index] = false;
                         } else {
                             any_found_since_last_header = true;
@@ -4087,6 +4163,60 @@ impl SettingsWindow {
             let weak = cx.weak_entity();
             self.ai_providers_page = Some(pages::build_ai_providers_page(weak, window, cx));
         }
+        // Build the "Connect a broker" entity here (where `Window` + `&mut self`
+        // are available) for the same reason as the AI providers page: it holds
+        // credential editors whose focus must survive re-renders. Subscribe to
+        // its `DismissEvent` so a successful connection pops the sub-page back to
+        // the Connections list, mirroring the old modal's auto-close.
+        if sub_page_link.r#type == SubPageType::BrokerConnect && self.broker_connect_page.is_none()
+        {
+            let page = cx.new(|cx| auracle_connections::BrokerWizard::new(window, cx));
+            self.broker_connect_subscription = Some(cx.subscribe_in(
+                &page,
+                window,
+                |settings_window, _page, _event: &gpui::DismissEvent, window, cx| {
+                    settings_window.pop_sub_page(window, cx);
+                },
+            ));
+            self.broker_connect_page = Some(page);
+        }
+        // Resolve the "Agent rules" sub-page state when it is pushed. The prompt
+        // store loads asynchronously and `AGENTS.md` existence is an async `fs`
+        // stat, so we gather everything off the render thread, cache it, and
+        // `notify()` once ready; until then the page honestly reports the library
+        // as still loading rather than claiming zero rules.
+        if sub_page_link.r#type == SubPageType::AgentRules && self.agent_rules.is_none() {
+            let store_task = prompt_store::PromptStore::global(cx);
+            let fs = workspace::AppState::global(cx).fs.clone();
+            let global_path = paths::agents_file().clone();
+            let project_path = all_projects(self.original_window.as_ref(), cx)
+                .next()
+                .and_then(|project| {
+                    let rel_path = util::rel_path::RelPath::unix("AGENTS.md").ok()?;
+                    let worktree = project.read(cx).visible_worktrees(cx).next()?;
+                    Some(worktree.read(cx).absolutize(rel_path))
+                });
+            cx.spawn(async move |settings_window, cx| {
+                let prompt_store = store_task.await.ok();
+                let global_file_exists = fs.is_file(&global_path).await;
+                let project_file_exists = match project_path.as_ref() {
+                    Some(path) => fs.is_file(path).await,
+                    None => false,
+                };
+                settings_window
+                    .update(cx, |settings_window, cx| {
+                        settings_window.agent_rules = Some(AgentRulesState {
+                            global_file_exists,
+                            project_path,
+                            project_file_exists,
+                            prompt_store,
+                        });
+                        cx.notify();
+                    })
+                    .ok();
+            })
+            .detach();
+        }
         self.sub_page_stack
             .push(SubPage::new(sub_page_link, section_header));
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
@@ -4095,6 +4225,14 @@ impl SettingsWindow {
 
     pub(crate) fn ai_providers_page(&self) -> Option<Entity<pages::AiProvidersPage>> {
         self.ai_providers_page.clone()
+    }
+
+    pub(crate) fn broker_connect_page(&self) -> Option<Entity<auracle_connections::BrokerWizard>> {
+        self.broker_connect_page.clone()
+    }
+
+    pub(crate) fn agent_rules(&self) -> Option<&AgentRulesState> {
+        self.agent_rules.as_ref()
     }
 
     /// Push a dynamically-created sub-page with a custom render function.
@@ -4121,6 +4259,7 @@ impl SettingsWindow {
             json_path,
             in_json: true,
             files: USER,
+            always_visible: false,
             render,
         };
         self.push_sub_page(sub_page_link, section_header.into(), window, cx);
@@ -4178,6 +4317,7 @@ impl SettingsWindow {
             json_path: None,
             in_json: false,
             files: USER | PROJECT,
+            always_visible: false,
             render: pages::render_skill_creator_page,
         };
 
@@ -4300,6 +4440,16 @@ impl SettingsWindow {
                 // Drop the page entity (and its cached configuration views) so a
                 // fresh one — reflecting current auth state — is built next open.
                 SubPageType::AiProviders => self.ai_providers_page = None,
+                // Drop the broker-connect page (and its credential editors +
+                // dismiss subscription) so a fresh one — reflecting the engine's
+                // current connection state — is built next open.
+                SubPageType::BrokerConnect => {
+                    self.broker_connect_page = None;
+                    self.broker_connect_subscription = None;
+                }
+                // Drop the cached rules state so the next open re-resolves the
+                // store and re-stats the files, reflecting current contents.
+                SubPageType::AgentRules => self.agent_rules = None,
                 _ => {}
             }
         }
@@ -5119,6 +5269,9 @@ pub mod test {
                 shared_settings: auracle_view_state::Load::Pending,
                 shared_settings_task: None,
                 ai_providers_page: None,
+                broker_connect_page: None,
+                broker_connect_subscription: None,
+                agent_rules: None,
             }
         }
     }
@@ -5253,6 +5406,9 @@ pub mod test {
             shared_settings: auracle_view_state::Load::Pending,
             shared_settings_task: None,
             ai_providers_page: None,
+            broker_connect_page: None,
+            broker_connect_subscription: None,
+            agent_rules: None,
         };
 
         settings_window.build_filter_table();

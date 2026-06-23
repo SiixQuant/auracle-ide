@@ -11,10 +11,12 @@ use ui::IntoElement;
 
 use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
-    SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
+    SettingsPage, SettingsPageItem, SubPageLink, SubPageType, USER, active_language,
+    all_language_names,
     pages::{
-        open_audio_test_window, render_account_page, render_ai_providers_page,
-        render_data_sources_page, render_edit_prediction_setup_page, render_skills_setup_page,
+        open_audio_test_window, render_account_page, render_agent_rules_page,
+        render_ai_providers_page, render_connections_page, render_data_sources_page,
+        render_edit_prediction_setup_page, render_skills_setup_page,
         render_tool_permissions_setup_page,
     },
 };
@@ -99,33 +101,28 @@ fn connections_page() -> SettingsPage {
                 ),
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_account_page,
             }),
             SettingsPageItem::SectionHeader("Broker connections"),
-            SettingsPageItem::ActionLink(ActionLink {
+            SettingsPageItem::SubPageLink(SubPageLink {
                 title: "Connect a broker".into(),
+                // Tagged so the settings window builds the broker-connect entity
+                // (which holds credential editors) on push and drops it on pop,
+                // exactly like the "Model providers" sub-page.
+                r#type: SubPageType::BrokerConnect,
+                // Deep-link target for `OpenBrokerWizard`/`OpenSettingsAt`, so the
+                // deploy gate and command palette can land directly on this page.
+                json_path: Some(auracle_connections::BROKER_CONNECT_SETTINGS_PATH),
                 description: Some(
                     "Connect a broker to route orders and pull market data. \
-                     The wizard shows what each broker can do before you connect."
+                     Each broker shows what it can do before you connect."
                         .into(),
                 ),
-                button_text: "Open".into(),
-                on_click: Arc::new(|settings_window, window, cx| {
-                    let Some(original_window) = settings_window.original_window else {
-                        return;
-                    };
-                    original_window
-                        .update(cx, |_workspace, original_window, cx| {
-                            original_window.dispatch_action(
-                                auracle_connections::OpenBrokerWizard.boxed_clone(),
-                                cx,
-                            );
-                            original_window.activate_window();
-                        })
-                        .ok();
-                    window.remove_window();
-                }),
+                in_json: false,
                 files: USER,
+                always_visible: true,
+                render: render_connections_page,
             }),
             SettingsPageItem::SectionHeader("Data sources"),
             SettingsPageItem::SubPageLink(SubPageLink {
@@ -139,6 +136,7 @@ fn connections_page() -> SettingsPage {
                 ),
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_data_sources_page,
             }),
         ]
@@ -161,6 +159,7 @@ fn developer_page(cx: &App) -> SettingsPage {
             json_path: Some("feature_flags"),
             in_json: true,
             files: USER,
+            always_visible: false,
             render: crate::pages::render_feature_flags_page,
         }));
     }
@@ -431,20 +430,30 @@ fn general_page(cx: &App) -> SettingsPage {
                 ),
                 metadata: None,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                files: USER,
-                title: "Settings Profiles",
-                description: "Any number of settings profiles that are temporarily applied on top of your existing user settings.",
-                field: Box::new(
-                    SettingField {
-                        organization_override: None,
-                        json_path: Some("settings_profiles"),
-                        pick: |settings_content| Some(settings_content),
-                        write: |_settings_content, _value, _| {},
-                    }
-                    .unimplemented(),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Settings Profiles".into(),
+                description: Some(
+                    "Pick a settings profile to temporarily apply on top of your existing user settings."
+                        .into(),
                 ),
-                metadata: None,
+                button_text: "Choose Profile".into(),
+                on_click: Arc::new(|settings_window, window, cx| {
+                    let Some(original_window) = settings_window.original_window else {
+                        return;
+                    };
+                    original_window
+                        .update(cx, |_workspace, original_window, cx| {
+                            original_window.dispatch_action(
+                                zed_actions::settings_profile_selector::Toggle.boxed_clone(),
+                                cx,
+                            );
+                            original_window.activate_window();
+                        })
+                        .ok();
+                    window.remove_window();
+                }),
+                files: USER,
+                always_visible: false,
             }),
         ]
     }
@@ -1487,6 +1496,7 @@ fn keymap_page() -> SettingsPage {
                     window.remove_window();
                 }),
                 files: USER,
+                always_visible: false,
             }),
         ]
     }
@@ -3381,6 +3391,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                     json_path: Some(link.leak()),
                     in_json: true,
                     files: USER | PROJECT,
+                    always_visible: false,
                     render: |this, scroll_handle, window, cx| {
                         let items: Box<[SettingsPageItem]> = concat_sections!(
                             language_settings_data(),
@@ -7832,6 +7843,7 @@ fn collaboration_page() -> SettingsPage {
                     open_audio_test_window(window, cx);
                 }),
                 files: USER,
+                always_visible: false,
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Output Audio Device",
@@ -7929,12 +7941,23 @@ fn ai_page() -> SettingsPage {
         let mut items = vec![
             SettingsPageItem::SectionHeader("Agent Configuration"),
             SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Agent Rules".into(),
+                r#type: SubPageType::AgentRules,
+                json_path: None,
+                description: Some("View and edit the agent's standing rules — your global and project AGENTS.md files and the reusable rules library.".into()),
+                in_json: false,
+                files: USER | PROJECT,
+                always_visible: false,
+                render: render_agent_rules_page,
+            }),
+            SettingsPageItem::SubPageLink(SubPageLink {
                 title: "Skills".into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SKILLS_SETTINGS_PATH),
                 description: Some("View and manage agent skills installed globally or in project worktrees.".into()),
                 in_json: false,
                 files: USER | PROJECT,
+                always_visible: false,
                 render: render_skills_setup_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
@@ -7944,6 +7967,7 @@ fn ai_page() -> SettingsPage {
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
                 in_json: true,
                 files: USER,
+                always_visible: false,
                 render: render_tool_permissions_setup_page,
             }),
         ];
@@ -8334,7 +8358,10 @@ fn ai_page() -> SettingsPage {
                 // Tagged so `SettingsWindow` builds (and later drops) the backing
                 // entity that caches each provider's live configuration view.
                 r#type: crate::SubPageType::AiProviders,
-                json_path: None,
+                // A synthetic path (no matching settings.json key) so menus and
+                // commands can deep-link straight to this sub-page via
+                // `OpenSettingsAt`, mirroring the agent-skills page.
+                json_path: Some(zed_actions::AI_MODEL_PROVIDERS_SETTINGS_PATH),
                 description: Some(
                     "Configure AI model providers and choose the default model.".into(),
                 ),
@@ -8342,6 +8369,7 @@ fn ai_page() -> SettingsPage {
                 // settings.json, so there's nothing to "Edit in settings.json".
                 in_json: false,
                 files: USER,
+                always_visible: true,
                 render: render_ai_providers_page,
             }),
         ]
@@ -10187,6 +10215,7 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             description: Some("Set up different edit prediction providers in complement to Auracle's built-in prediction model.".into()),
             in_json: false,
             files: USER,
+            always_visible: false,
             render: render_edit_prediction_setup_page
         }),
         SettingsPageItem::SettingItem(SettingItem {

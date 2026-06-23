@@ -152,6 +152,9 @@ pub struct OpenSettingsAt {
 /// `OpenSettingsAt` path of the agent skills page in the settings UI.
 pub const AGENT_SKILLS_SETTINGS_PATH: &str = "agent.skills";
 
+/// `OpenSettingsAt` path of the AI model providers page in the settings UI.
+pub const AI_MODEL_PROVIDERS_SETTINGS_PATH: &str = "ai.model_providers";
+
 #[derive(PartialEq, Clone, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenSettingsAtTarget {

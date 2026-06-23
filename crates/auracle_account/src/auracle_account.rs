@@ -29,6 +29,48 @@ pub struct LicenseSummary {
     pub tone: LicenseTone,
 }
 
+/// A per-user setting the operator can edit, surfaced on the Account page as a
+/// shortcut into Zed's native settings. The Account page itself is read-only for
+/// engine-owned identity (email, plan, license); these point at the settings Zed
+/// has always let a user own — appearance, editor font, keymap — so the page
+/// restores the personal-settings reach the native Zed account surface implies
+/// without duplicating editors the rest of Settings already provides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersonalSetting {
+    /// The row's label, e.g. "Appearance".
+    pub title: &'static str,
+    /// One honest line on what editing it does.
+    pub description: &'static str,
+    /// The `json_path` of the native setting to navigate to. Stable identifiers
+    /// already present in the settings catalog, so the shortcut lands on a real,
+    /// editable control rather than a dead end.
+    pub target_json_path: &'static str,
+}
+
+/// The per-user settings the Account page links into. These are the settings
+/// Zed treats as the user's own (not engine-owned), so they're editable: the
+/// Account page surfaces them as navigation, the native pages do the editing.
+/// Order is the order shown.
+pub fn personal_settings() -> [PersonalSetting; 3] {
+    [
+        PersonalSetting {
+            title: "Appearance",
+            description: "Pick your theme and light/dark mode.",
+            target_json_path: "theme$",
+        },
+        PersonalSetting {
+            title: "Editor font",
+            description: "Set the editor's font size.",
+            target_json_path: "buffer_font_size",
+        },
+        PersonalSetting {
+            title: "Keymap",
+            description: "Choose a base keymap.",
+            target_json_path: "base_keymap",
+        },
+    ]
+}
+
 /// "1 day left" / "N days left", pluralised honestly.
 fn days_left_phrase(days: i64) -> String {
     if days == 1 {
@@ -167,6 +209,34 @@ mod tests {
                 tone: LicenseTone::Neutral,
             }
         );
+    }
+
+    #[test]
+    fn personal_settings_target_real_editable_paths() {
+        // Each shortcut must carry a non-empty title/description and a json_path,
+        // so the Account page never renders a labelless or dead-end row. The exact
+        // paths are asserted because they must match identifiers in the settings
+        // catalog for navigation to resolve.
+        let settings = personal_settings();
+        let paths: Vec<&str> = settings.iter().map(|s| s.target_json_path).collect();
+        assert_eq!(paths, vec!["theme$", "buffer_font_size", "base_keymap"]);
+        for setting in settings {
+            assert!(!setting.title.is_empty());
+            assert!(!setting.description.is_empty());
+            assert!(!setting.target_json_path.is_empty());
+        }
+    }
+
+    #[test]
+    fn personal_settings_have_distinct_targets() {
+        // No two shortcuts may point at the same setting, or the page would offer
+        // two rows that navigate to the same place.
+        let settings = personal_settings();
+        for (i, a) in settings.iter().enumerate() {
+            for b in settings.iter().skip(i + 1) {
+                assert_ne!(a.target_json_path, b.target_json_path);
+            }
+        }
     }
 
     #[test]

@@ -441,14 +441,26 @@ impl AiProvidersPage {
                 .into_any_element();
         }
 
+        let last = rows.len().saturating_sub(1);
         v_flex()
             .gap_1()
             .child(Label::new("Providers").size(LabelSize::Large))
-            .children(rows.iter().map(|row| self.render_provider_row(row, cx)))
+            .children(rows.iter().enumerate().map(|(index, row)| {
+                // Match the native list convention (see the Skills sub-page):
+                // separate rows with a divider, but never trail one after the
+                // last row, which would leave a dangling rule above the page's
+                // bottom padding.
+                self.render_provider_row(row, index < last, cx)
+            }))
             .into_any_element()
     }
 
-    fn render_provider_row(&self, row: &AiProviderRow, cx: &mut Context<Self>) -> AnyElement {
+    fn render_provider_row(
+        &self,
+        row: &AiProviderRow,
+        with_divider: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = LanguageModelProviderId::from(row.id.clone());
         let is_selected = self.selected_provider.as_ref() == Some(&id);
         let authenticated = row.authenticated;
@@ -558,7 +570,9 @@ impl AiProvidersPage {
                         }),
                 )
             })
-            .child(Divider::horizontal().flex_grow_1())
+            .when(with_divider, |this| {
+                this.child(Divider::horizontal().flex_grow_1())
+            })
             .into_any_element()
     }
 
