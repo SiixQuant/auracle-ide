@@ -27,8 +27,8 @@ use command_palette_hooks::CommandPaletteFilter;
 use gpui::{
     Action, Anchor, Animation, AnimationExt, AnyElement, App, Context, Element, Entity, Focusable,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, TaskExt, WeakEntity, Window, actions, div,
-    pulsating_between,
+    StatefulInteractiveElement, Styled, Subscription, Task, TaskExt, WeakEntity, Window, actions,
+    div, pulsating_between,
 };
 use onboarding_banner::OnboardingBanner;
 use project::{
@@ -44,7 +44,7 @@ use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
+    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
     PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
@@ -204,6 +204,20 @@ pub struct TitleBar {
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
     _diagnostics_subscription: Option<gpui::Subscription>,
+    /// The connected account's GitHub identity (from the engine), or None when no
+    /// GitHub is linked — the avatar then renders nothing, never a placeholder.
+    github_user: Option<GithubUser>,
+    _github_fetch: Task<()>,
+}
+
+/// The GitHub identity the engine reports for the connected account, fetched over
+/// loopback from `/ui/api/github/user`. Absent until the first fetch resolves and
+/// whenever the engine reports no linked GitHub account.
+#[derive(Clone)]
+struct GithubUser {
+    login: SharedString,
+    avatar_url: SharedString,
+    html_url: SharedString,
 }
 
 impl Render for TitleBar {
@@ -383,6 +397,7 @@ impl Render for TitleBar {
                             ),
                     )
                 })
+                .children(self.render_github_avatar(cx))
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))
                 })
@@ -502,6 +517,12 @@ impl TitleBar {
 
         let banner = None;
 
+        subscriptions.push(
+            cx.observe_global::<auracle_connect::ConnectGeneration>(|this, cx| {
+                this._github_fetch = Self::fetch_github_user(cx);
+            }),
+        );
+
         let mut this = Self {
             platform_titlebar,
             application_menu,
@@ -515,11 +536,99 @@ impl TitleBar {
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
             _diagnostics_subscription: None,
+            github_user: None,
+            _github_fetch: Task::ready(()),
         };
 
         this.observe_diagnostics(cx);
+        this._github_fetch = Self::fetch_github_user(cx);
 
         this
+    }
+
+    /// Fetch the connected account's GitHub identity over loopback and fold it
+    /// into `github_user`. A missing key, an unreachable engine, a non-2xx
+    /// status, or an account with no linked GitHub all resolve to `None`, so the
+    /// avatar simply disappears — never a fabricated or stale identity.
+    fn fetch_github_user(cx: &mut Context<Self>) -> Task<()> {
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let fetched = Self::request_github_user(http).await;
+            this.update(cx, |this, cx| {
+                let changed = match (&this.github_user, &fetched) {
+                    (Some(a), Some(b)) => a.login != b.login || a.avatar_url != b.avatar_url,
+                    (None, None) => false,
+                    _ => true,
+                };
+                this.github_user = fetched;
+                if changed {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+    }
+
+    async fn request_github_user(http: Arc<dyn http_client::HttpClient>) -> Option<GithubUser> {
+        use futures::AsyncReadExt as _;
+        let config = auracle_connect::load_config();
+        let key = config.api_key.filter(|k| !k.trim().is_empty())?;
+        let url = config
+            .engine_url
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:1969".to_string());
+        // The session key travels only in the Cookie the engine's require_user
+        // auth reads — never a URL or log line.
+        let request = http_client::http::Request::builder()
+            .uri(format!("{url}/ui/api/github/user"))
+            .header("Cookie", format!("auracle_session={key}"))
+            .body(http_client::AsyncBody::default())
+            .log_err()?;
+        let mut response = http.send(request).await.log_err()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let mut body = String::new();
+        response
+            .body_mut()
+            .read_to_string(&mut body)
+            .await
+            .log_err()?;
+        let value: serde_json::Value = serde_json::from_str(&body).log_err()?;
+        // Any field absent => no avatar, never a fabricated one.
+        let login = value.get("login").and_then(|v| v.as_str())?;
+        let avatar_url = value.get("avatar_url").and_then(|v| v.as_str())?;
+        if login.is_empty() || avatar_url.is_empty() {
+            return None;
+        }
+        let html_url = value
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("https://github.com");
+        Some(GithubUser {
+            login: login.to_string().into(),
+            avatar_url: avatar_url.to_string().into(),
+            html_url: html_url.to_string().into(),
+        })
+    }
+
+    /// The GitHub avatar shown left of the settings gear. Renders nothing when no
+    /// account is connected — no placeholder, no dead control. Clicking opens the
+    /// GitHub profile; the tooltip shows the login.
+    fn render_github_avatar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let user = self.github_user.clone()?;
+        let html_url = user.html_url;
+        let tooltip = format!("GitHub: {}", user.login);
+        Some(
+            div()
+                .id("github-avatar")
+                .cursor_pointer()
+                .child(Avatar::new(user.avatar_url).size(rems(0.875)))
+                .tooltip(Tooltip::text(tooltip))
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.open_url(html_url.as_ref());
+                })),
+        )
     }
 
     fn worktree_count(&self, cx: &App) -> usize {
