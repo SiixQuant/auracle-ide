@@ -43,6 +43,7 @@ members = [
     "crates/auracle_status_view",
     "crates/auracle_studio_results",
     "crates/auracle_schedules",
+    "crates/auracle_session",
     "crates/auracle_settings_nav",
     "crates/auracle_strategies",
     "crates/auracle_system_prompt",
@@ -496,6 +497,7 @@ auracle_status = { path = "crates/auracle_status" }
 auracle_status_view = { path = "crates/auracle_status_view" }
 auracle_studio_results = { path = "crates/auracle_studio_results" }
 auracle_schedules = { path = "crates/auracle_schedules" }
+auracle_session = { path = "crates/auracle_session" }
 auracle_settings_nav = { path = "crates/auracle_settings_nav" }
 auracle_strategies = { path = "crates/auracle_strategies" }
 auracle_system_prompt = { path = "crates/auracle_system_prompt" }

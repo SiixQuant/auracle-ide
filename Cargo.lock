@@ -1595,6 +1595,13 @@ name = "auracle_schedules"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_session"
+version = "0.1.0"
+dependencies = [
+ "auracle_artifact",
+]
+
+[[package]]
 name = "auracle_settings_nav"
 version = "0.1.0"
 
