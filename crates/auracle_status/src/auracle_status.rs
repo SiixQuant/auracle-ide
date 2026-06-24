@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use auracle_status_view::{ChipTone, EngineFacts, chip_view};
+use auracle_status_view::{ChipTone, EngineFacts, QcFacts, chip_view, qc_chip_view};
 use futures::AsyncReadExt as _;
 use gpui::{App, Entity, EventEmitter, Task, WeakEntity, Window};
 use ui::Tooltip;
@@ -187,3 +187,146 @@ pub fn register(workspace: &mut Workspace, window: &mut Window, cx: &mut Context
 }
 
 pub fn init(_cx: &mut App) {}
+
+/// The QuantConnect connection chip — tells the truth about whether
+/// QuantConnect is connected (and as whom), polled from the engine's
+/// `/ui/api/quantconnect/connection` route and refreshed after a Connect save.
+/// When the engine route is absent or no credentials are set it reads
+/// "QuantConnect: off" — never a fabricated connection. The whole chip text is
+/// decided by the gpui-free `qc_chip_view` reducer.
+pub struct QcStatus {
+    state: QcFacts,
+    _poll: Task<()>,
+}
+
+impl QcStatus {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+            this.state = QcFacts::Checking;
+            cx.notify();
+        })
+        .detach();
+        let poll = Self::spawn_poll(cx);
+        Self {
+            state: if auracle_connect::load_config()
+                .api_key
+                .filter(|key| !key.trim().is_empty())
+                .is_some()
+            {
+                QcFacts::Checking
+            } else {
+                QcFacts::NotConnected
+            },
+            _poll: poll,
+        }
+    }
+
+    fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            loop {
+                let next = poll_qc_once(http.clone()).await;
+                if this
+                    .update(cx, |this, cx| {
+                        this.state = next.clone();
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                cx.background_executor().timer(POLL_EVERY).await;
+            }
+        })
+    }
+}
+
+async fn poll_qc_once(http: Arc<dyn http_client::HttpClient>) -> QcFacts {
+    let config = auracle_connect::load_config();
+    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+        return QcFacts::NotConnected;
+    };
+    let url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let attempt: Result<QcFacts> = async {
+        let request = http_client::http::Request::builder()
+            .uri(format!("{url}/ui/api/quantconnect/connection"))
+            .header("Cookie", format!("auracle_session={key}"))
+            .body(http_client::AsyncBody::default())?;
+        let mut response = http.send(request).await?;
+        if !response.status().is_success() {
+            anyhow::bail!("status {}", response.status());
+        }
+        let mut body = String::new();
+        response.body_mut().read_to_string(&mut body).await?;
+        let value: serde_json::Value = serde_json::from_str(&body)?;
+        if !value
+            .get("connected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Ok(QcFacts::NotConnected);
+        }
+        let user_id = value
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let projects = value
+            .get("project_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        Ok(QcFacts::Connected { user_id, projects })
+    }
+    .await;
+    // Endpoint absent (not deployed), unreachable, or unparseable => honest
+    // "off". The secret only ever lived in the Cookie header, never the error.
+    attempt.log_err().unwrap_or(QcFacts::NotConnected)
+}
+
+impl EventEmitter<()> for QcStatus {}
+
+impl Render for QcStatus {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = qc_chip_view(self.state.clone());
+        let dot = match view.tone {
+            ChipTone::Good => cx.theme().status().success,
+            ChipTone::Bad => cx.theme().status().error,
+            ChipTone::Checking => cx.theme().status().warning,
+            ChipTone::Muted => cx.theme().colors().text_muted,
+        };
+        h_flex()
+            .id("auracle-quantconnect-chip")
+            .gap_1p5()
+            .px_1()
+            .child(div().size_1p5().rounded_full().bg(dot))
+            .child(
+                Label::new(view.label)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .tooltip(Tooltip::text(view.tooltip))
+    }
+}
+
+impl StatusItemView for QcStatus {
+    fn set_active_pane_item(
+        &mut self,
+        _: Option<&dyn ItemHandle>,
+        _window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+    }
+
+    fn hide_setting(&self, _: &App) -> Option<workspace::HideStatusItem> {
+        None
+    }
+}
+
+pub fn register_qc(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    let item: Entity<QcStatus> = cx.new(|cx| QcStatus::new(cx));
+    workspace.status_bar().update(cx, |status_bar, cx| {
+        status_bar.add_right_item(item, window, cx);
+    });
+}
