@@ -1565,6 +1565,10 @@ name = "auracle_pill"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_qc_import"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_runway"
 version = "0.1.0"
 
