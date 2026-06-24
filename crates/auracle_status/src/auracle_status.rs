@@ -15,15 +15,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use auracle_status_view::{ChipTone, EngineFacts, QcFacts, chip_view, qc_chip_view};
+use auracle_status_view::{
+    ChipTone, ConnectionStatus, EngineFacts, QcFacts, chip_view, rollup_chip_view,
+};
 use futures::AsyncReadExt as _;
-use gpui::{App, Entity, EventEmitter, Task, WeakEntity, Window};
+use gpui::{App, Entity, EventEmitter, Hsla, Task, WeakEntity, Window};
 use ui::Tooltip;
 use ui::prelude::*;
 use util::ResultExt as _;
 use workspace::{StatusItemView, Workspace, item::ItemHandle};
 
 const POLL_EVERY: Duration = Duration::from_secs(30);
+
+/// The one place a chip tone becomes a status-bar dot colour. Both the engine
+/// chip and the connections rollup resolve through here, so the tone→colour
+/// mapping lives once instead of being copy-pasted per chip.
+fn dot_color(tone: ChipTone, cx: &App) -> Hsla {
+    match tone {
+        ChipTone::Good => cx.theme().status().success,
+        ChipTone::Bad => cx.theme().status().error,
+        ChipTone::Checking => cx.theme().status().warning,
+        ChipTone::Muted => cx.theme().colors().text_muted,
+    }
+}
 
 pub struct AuracleStatus {
     /// The already-parsed engine facts the chip decides over — the gpui-free
@@ -139,12 +153,7 @@ impl Render for AuracleStatus {
         // The whole chip — label, tone, and tooltip — is decided by the gpui-free
         // reducer; this view only maps the reducer's tone to a theme colour.
         let view = chip_view(self.state.clone());
-        let dot = match view.tone {
-            ChipTone::Good => cx.theme().status().success,
-            ChipTone::Bad => cx.theme().status().error,
-            ChipTone::Checking => cx.theme().status().warning,
-            ChipTone::Muted => cx.theme().colors().text_muted,
-        };
+        let dot = dot_color(view.tone, cx);
 
         h_flex()
             .id("auracle-engine-chip")
@@ -188,35 +197,58 @@ pub fn register(workspace: &mut Workspace, window: &mut Window, cx: &mut Context
 
 pub fn init(_cx: &mut App) {}
 
-/// The QuantConnect connection chip — tells the truth about whether
-/// QuantConnect is connected (and as whom), polled from the engine's
-/// `/ui/api/quantconnect/connection` route and refreshed after a Connect save.
-/// When the engine route is absent or no credentials are set it reads
-/// "QuantConnect: off" — never a fabricated connection. The whole chip text is
-/// decided by the gpui-free `qc_chip_view` reducer.
-pub struct QcStatus {
-    state: QcFacts,
+/// The connections rollup chip — one chip that summarises every non-engine
+/// connection (QuantConnect today; brokers and data sources as they gain status
+/// probes) instead of one chip per connector. The engine keeps its own chip; this
+/// one collapses the rest into a single worst-state + count read, decided by the
+/// gpui-free `rollup_chip_view` reducer. Clicking it opens Settings → Connections.
+/// It never fabricates a connection: an absent or unreachable endpoint reads
+/// honestly through each member's tone.
+pub struct ConnectionsRollup {
+    /// The non-engine connections being summarised. Push more members here as
+    /// other connectors gain a status probe; the reducer collapses the list.
+    members: Vec<ConnectionStatus>,
     _poll: Task<()>,
 }
 
-impl QcStatus {
+/// Map a QuantConnect probe result to its rollup member. `Good`/connected only on
+/// an actual authenticated connection — never from a stale or in-flight probe.
+fn qc_to_status(facts: QcFacts) -> ConnectionStatus {
+    let (tone, connected) = match facts {
+        QcFacts::Connected { .. } => (ChipTone::Good, true),
+        QcFacts::Checking => (ChipTone::Checking, false),
+        QcFacts::NotConnected => (ChipTone::Muted, false),
+    };
+    ConnectionStatus {
+        name: "QuantConnect".to_string(),
+        tone,
+        connected,
+    }
+}
+
+impl ConnectionsRollup {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
-            this.state = QcFacts::Checking;
+            // A saved connection invalidates every member until the next probe;
+            // show checking rather than a stale read.
+            for member in &mut this.members {
+                member.tone = ChipTone::Checking;
+                member.connected = false;
+            }
             cx.notify();
         })
         .detach();
         let poll = Self::spawn_poll(cx);
+        let has_key = auracle_connect::load_config()
+            .api_key
+            .filter(|key| !key.trim().is_empty())
+            .is_some();
         Self {
-            state: if auracle_connect::load_config()
-                .api_key
-                .filter(|key| !key.trim().is_empty())
-                .is_some()
-            {
+            members: vec![qc_to_status(if has_key {
                 QcFacts::Checking
             } else {
                 QcFacts::NotConnected
-            },
+            })],
             _poll: poll,
         }
     }
@@ -225,10 +257,10 @@ impl QcStatus {
         let http = cx.http_client();
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             loop {
-                let next = poll_qc_once(http.clone()).await;
+                let members = poll_connections_once(http.clone()).await;
                 if this
                     .update(cx, |this, cx| {
-                        this.state = next.clone();
+                        this.members = members;
                         cx.notify();
                     })
                     .is_err()
@@ -239,6 +271,13 @@ impl QcStatus {
             }
         })
     }
+}
+
+/// Probe every non-engine connection once and return their rollup members. Today
+/// that is QuantConnect alone; add more probes here as connectors gain status.
+async fn poll_connections_once(http: Arc<dyn http_client::HttpClient>) -> Vec<ConnectionStatus> {
+    let quantconnect = qc_to_status(poll_qc_once(http.clone()).await);
+    vec![quantconnect]
 }
 
 async fn poll_qc_once(http: Arc<dyn http_client::HttpClient>) -> QcFacts {
@@ -285,19 +324,16 @@ async fn poll_qc_once(http: Arc<dyn http_client::HttpClient>) -> QcFacts {
     attempt.log_err().unwrap_or(QcFacts::NotConnected)
 }
 
-impl EventEmitter<()> for QcStatus {}
+impl EventEmitter<()> for ConnectionsRollup {}
 
-impl Render for QcStatus {
+impl Render for ConnectionsRollup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = qc_chip_view(self.state.clone());
-        let dot = match view.tone {
-            ChipTone::Good => cx.theme().status().success,
-            ChipTone::Bad => cx.theme().status().error,
-            ChipTone::Checking => cx.theme().status().warning,
-            ChipTone::Muted => cx.theme().colors().text_muted,
-        };
+        // The whole chip is decided by the gpui-free rollup reducer; this view
+        // only resolves the tone to a dot colour and routes the click.
+        let view = rollup_chip_view(&self.members);
+        let dot = dot_color(view.tone, cx);
         h_flex()
-            .id("auracle-quantconnect-chip")
+            .id("auracle-connections-chip")
             .gap_1p5()
             .px_1()
             .child(div().size_1p5().rounded_full().bg(dot))
@@ -307,10 +343,19 @@ impl Render for QcStatus {
                     .color(Color::Muted),
             )
             .tooltip(Tooltip::text(view.tooltip))
+            .on_click(|_, window, cx| {
+                window.dispatch_action(
+                    Box::new(zed_actions::OpenSettingsAt {
+                        path: "connections.account".to_string(),
+                        target: None,
+                    }),
+                    cx,
+                );
+            })
     }
 }
 
-impl StatusItemView for QcStatus {
+impl StatusItemView for ConnectionsRollup {
     fn set_active_pane_item(
         &mut self,
         _: Option<&dyn ItemHandle>,
@@ -324,8 +369,12 @@ impl StatusItemView for QcStatus {
     }
 }
 
-pub fn register_qc(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
-    let item: Entity<QcStatus> = cx.new(|cx| QcStatus::new(cx));
+pub fn register_connections(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let item: Entity<ConnectionsRollup> = cx.new(|cx| ConnectionsRollup::new(cx));
     workspace.status_bar().update(cx, |status_bar, cx| {
         status_bar.add_right_item(item, window, cx);
     });

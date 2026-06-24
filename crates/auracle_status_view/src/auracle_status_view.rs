@@ -165,9 +165,109 @@ pub fn qc_chip_view(facts: QcFacts) -> ChipView {
     }
 }
 
+/// One non-engine connection's resolved status, as the rollup chip sees it.
+/// The engine connection is deliberately excluded — it keeps its own always-
+/// visible chip — so the rollup only ever summarises brokers, data sources, and
+/// QuantConnect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionStatus {
+    /// Display name, e.g. "QuantConnect" or "IBKR".
+    pub name: String,
+    pub tone: ChipTone,
+    /// True only when the connection is actually connected and healthy.
+    pub connected: bool,
+}
+
+/// Collapse N non-engine connections into one rollup chip. The honesty rules:
+/// - `Good` only when every member is connected (one in-flight or off member
+///   pulls the rollup off `Good`).
+/// - otherwise the worst member tone surfaces, `Bad` > `Checking` > `Muted`.
+/// - an empty set reads "no connections yet" in muted, never a fake `Good`.
+///
+/// The label stays compact for the status bar (`connections: <connected>/<total>`)
+/// and the tooltip carries the honest per-state breakdown.
+pub fn rollup_chip_view(members: &[ConnectionStatus]) -> ChipView {
+    if members.is_empty() {
+        return ChipView {
+            label: "connections: none".to_string(),
+            tone: ChipTone::Muted,
+            tooltip: "No broker, data, or QuantConnect connections yet. \
+                      Click to add one."
+                .to_string(),
+        };
+    }
+
+    let total = members.len();
+    let mut connected = 0usize;
+    let mut off = 0usize;
+    let mut checking = 0usize;
+    let mut unreachable = 0usize;
+    let mut any_bad = false;
+    let mut any_checking = false;
+    for member in members {
+        if member.connected {
+            connected += 1;
+            continue;
+        }
+        match member.tone {
+            ChipTone::Bad => {
+                unreachable += 1;
+                any_bad = true;
+            }
+            ChipTone::Checking => {
+                checking += 1;
+                any_checking = true;
+            }
+            // A not-connected member with any other tone is simply "off".
+            ChipTone::Muted | ChipTone::Good => off += 1,
+        }
+    }
+
+    // Worst tone wins; `Good` only when nothing is off/checking/unreachable.
+    let tone = if any_bad {
+        ChipTone::Bad
+    } else if any_checking {
+        ChipTone::Checking
+    } else if connected == total {
+        ChipTone::Good
+    } else {
+        ChipTone::Muted
+    };
+
+    // Tooltip: only mention the states that are actually present, so it never
+    // pads with "0 unreachable" noise.
+    let mut parts = Vec::new();
+    if connected > 0 {
+        parts.push(format!("{connected} connected"));
+    }
+    if off > 0 {
+        parts.push(format!("{off} off"));
+    }
+    if checking > 0 {
+        parts.push(format!("{checking} checking"));
+    }
+    if unreachable > 0 {
+        parts.push(format!("{unreachable} unreachable"));
+    }
+
+    ChipView {
+        label: format!("connections: {connected}/{total}"),
+        tone,
+        tooltip: format!("{}. Click to manage connections.", parts.join(" \u{b7} ")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn member(name: &str, tone: ChipTone, connected: bool) -> ConnectionStatus {
+        ConnectionStatus {
+            name: name.to_string(),
+            tone,
+            connected,
+        }
+    }
 
     #[test]
     fn not_connected_is_muted_with_connect_hint() {
@@ -298,5 +398,67 @@ mod tests {
         });
         assert!(view.tooltip.contains("1 project "));
         assert!(!view.tooltip.contains("1 projects"));
+    }
+
+    #[test]
+    fn rollup_empty_is_muted_not_a_fake_good() {
+        let view = rollup_chip_view(&[]);
+        assert_eq!(view.label, "connections: none");
+        assert_eq!(view.tone, ChipTone::Muted);
+        assert_ne!(view.tone, ChipTone::Good);
+    }
+
+    #[test]
+    fn rollup_all_connected_is_good() {
+        let view = rollup_chip_view(&[
+            member("IBKR", ChipTone::Good, true),
+            member("QuantConnect", ChipTone::Good, true),
+        ]);
+        assert_eq!(view.label, "connections: 2/2");
+        assert_eq!(view.tone, ChipTone::Good);
+        assert!(view.tooltip.contains("2 connected"));
+    }
+
+    #[test]
+    fn rollup_one_off_drops_below_good() {
+        let view = rollup_chip_view(&[
+            member("IBKR", ChipTone::Good, true),
+            member("QuantConnect", ChipTone::Muted, false),
+        ]);
+        assert_eq!(view.label, "connections: 1/2");
+        assert_eq!(view.tone, ChipTone::Muted);
+        assert_ne!(view.tone, ChipTone::Good);
+        assert!(view.tooltip.contains("1 connected"));
+        assert!(view.tooltip.contains("1 off"));
+    }
+
+    #[test]
+    fn rollup_any_unreachable_is_bad_and_wins_over_checking() {
+        let view = rollup_chip_view(&[
+            member("IBKR", ChipTone::Good, true),
+            member("Alpaca", ChipTone::Checking, false),
+            member("QuantConnect", ChipTone::Bad, false),
+        ]);
+        assert_eq!(view.tone, ChipTone::Bad);
+        assert!(view.tooltip.contains("1 unreachable"));
+        assert!(view.tooltip.contains("1 checking"));
+    }
+
+    #[test]
+    fn rollup_checking_wins_when_no_bad() {
+        let view = rollup_chip_view(&[
+            member("IBKR", ChipTone::Good, true),
+            member("QuantConnect", ChipTone::Checking, false),
+        ]);
+        assert_eq!(view.tone, ChipTone::Checking);
+    }
+
+    #[test]
+    fn rollup_tooltip_omits_absent_states() {
+        let view = rollup_chip_view(&[member("IBKR", ChipTone::Good, true)]);
+        assert!(view.tooltip.contains("1 connected"));
+        assert!(!view.tooltip.contains("off"));
+        assert!(!view.tooltip.contains("checking"));
+        assert!(!view.tooltip.contains("unreachable"));
     }
 }
