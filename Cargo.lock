@@ -1382,6 +1382,15 @@ name = "auracle_account"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_actions"
+version = "0.1.0"
+dependencies = [
+ "auracle_connections",
+ "http_client",
+ "serde_json",
+]
+
+[[package]]
 name = "auracle_agent_commands"
 version = "0.1.0"
 dependencies = [

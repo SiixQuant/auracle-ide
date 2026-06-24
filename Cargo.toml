@@ -16,6 +16,7 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auracle_account",
+    "crates/auracle_actions",
     "crates/auracle_agent_commands",
     "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
@@ -468,6 +469,7 @@ rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 auracle_account = { path = "crates/auracle_account" }
+auracle_actions = { path = "crates/auracle_actions" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_ai_settings = { path = "crates/auracle_ai_settings" }
 auracle_backtest_results = { path = "crates/auracle_backtest_results" }
