@@ -1417,6 +1417,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_brand"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_chart_layout"
 version = "0.1.0"
 

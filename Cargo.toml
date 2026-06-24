@@ -19,6 +19,7 @@ members = [
     "crates/auracle_agent_commands",
     "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
+    "crates/auracle_brand",
     "crates/auracle_chart_layout",
     "crates/auracle_charts",
     "crates/auracle_cockpit",
@@ -468,6 +469,7 @@ auracle_account = { path = "crates/auracle_account" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_ai_settings = { path = "crates/auracle_ai_settings" }
 auracle_backtest_results = { path = "crates/auracle_backtest_results" }
+auracle_brand = { path = "crates/auracle_brand" }
 auracle_chart_layout = { path = "crates/auracle_chart_layout" }
 auracle_charts = { path = "crates/auracle_charts" }
 auracle_cockpit = { path = "crates/auracle_cockpit" }
