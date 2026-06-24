@@ -16,7 +16,7 @@ use crate::{
     pages::{
         open_audio_test_window, render_account_page, render_agent_rules_page,
         render_ai_providers_page, render_connections_page, render_data_sources_page,
-        render_edit_prediction_setup_page, render_skills_setup_page,
+        render_edit_prediction_setup_page, render_quantconnect_page, render_skills_setup_page,
         render_tool_permissions_setup_page,
     },
 };
@@ -138,6 +138,26 @@ fn connections_page() -> SettingsPage {
                 files: USER,
                 always_visible: true,
                 render: render_data_sources_page,
+            }),
+            SettingsPageItem::SectionHeader("QuantConnect"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Connect QuantConnect".into(),
+                // Tagged so the settings window builds the QuantConnect-connect
+                // entity (which holds the credential editors) on push and drops
+                // it on pop, mirroring the broker-connect sub-page.
+                r#type: SubPageType::QuantConnectConnect,
+                // Deep-link target for `OpenSettingsAt`, so the connections status
+                // chip can land directly on this page.
+                json_path: Some("connections.quantconnect"),
+                description: Some(
+                    "Connect QuantConnect to import your LEAN strategies into \
+                     Auracle. Your API token is stored in the engine vault."
+                        .into(),
+                ),
+                in_json: false,
+                files: USER,
+                always_visible: true,
+                render: render_quantconnect_page,
             }),
         ]
         .into_boxed_slice(),
