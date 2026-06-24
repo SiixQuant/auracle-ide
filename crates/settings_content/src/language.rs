@@ -105,7 +105,7 @@ impl EditPredictionProvider {
 
     pub fn display_name(&self) -> Option<&'static str> {
         match self {
-            EditPredictionProvider::Zed => Some("Zed AI"),
+            EditPredictionProvider::Zed => Some("Auracle AI"),
             EditPredictionProvider::Copilot => Some("GitHub Copilot"),
             EditPredictionProvider::Codestral => Some("Codestral"),
             EditPredictionProvider::Mercury => Some("Mercury"),
