@@ -2659,6 +2659,82 @@ impl SettingsWindow {
         self.sub_page_stack.clear();
     }
 
+    /// If the section under this non-root nav entry is a pure "gateway" — its only
+    /// content is a single [`SubPageLink`], with no settings or action items — return
+    /// that link and its section header. Every Connections destination (Account,
+    /// broker connections, data sources, QuantConnect) and surfaces like "Model
+    /// providers" or "Feature Flags" are such gateways: the section exists only to
+    /// open its sub-page. Selecting the nav entry should open that page directly
+    /// instead of scrolling to a card the user then has to click "Configure" on.
+    /// Sections that hold real settings (most of the app) return `None` and keep
+    /// the scroll-to-section behaviour.
+    fn gateway_sub_page_for_nav_entry(
+        &self,
+        navbar_entry_index: usize,
+    ) -> Option<(SubPageLink, SharedString)> {
+        let entry = self.navbar_entries.get(navbar_entry_index)?;
+        if entry.is_root {
+            return None;
+        }
+        let header_item_index = entry.item_index?;
+        let page = self.pages.get(entry.page_index)?;
+        let header = match page.items.get(header_item_index)? {
+            SettingsPageItem::SectionHeader(title) => SharedString::new_static(title),
+            _ => return None,
+        };
+
+        let mut link = None;
+        for item in page.items.iter().skip(header_item_index + 1) {
+            match item {
+                SettingsPageItem::SectionHeader(_) => break,
+                SettingsPageItem::SubPageLink(sub_page_link) => {
+                    if link.is_some() {
+                        // More than one sub-page in the section: not a sole gateway.
+                        return None;
+                    }
+                    link = Some(sub_page_link.clone());
+                }
+                // A real setting/action item makes the section a destination in its
+                // own right, so keep the default scroll-to-section behaviour.
+                _ => return None,
+            }
+        }
+        link.map(|link| (link, header))
+    }
+
+    /// Activate a nav entry from an explicit click or keypress. Gateway sections
+    /// (see [`Self::gateway_sub_page_for_nav_entry`]) open their sub-page directly;
+    /// every other entry scrolls to its section as before. The entity behind a
+    /// gateway (the broker-connect form, for instance, which fetches on build) is
+    /// only created on this explicit activation, never on mere focus traversal of
+    /// the rail.
+    fn activate_navbar_entry(
+        &mut self,
+        navbar_entry_index: usize,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) {
+        if let Some((link, header)) = self.gateway_sub_page_for_nav_entry(navbar_entry_index) {
+            let already_open = self.navbar_entry == navbar_entry_index
+                && self
+                    .sub_page_stack
+                    .last()
+                    .is_some_and(|sub_page| sub_page.link == link);
+            if already_open {
+                return;
+            }
+            // Tear down any open sub-page (dropping its cached entity) before
+            // navigating, then select the page and open the gateway's sub-page.
+            while !self.sub_page_stack.is_empty() {
+                self.pop_sub_page(window, cx);
+            }
+            self.open_navbar_entry_page(navbar_entry_index);
+            self.push_sub_page(link, header, window, cx);
+            return;
+        }
+        self.open_and_scroll_to_navbar_entry(navbar_entry_index, None, true, window, cx);
+    }
+
     fn open_best_matching_nav_page(&mut self, query_words: &[&str]) {
         let mut entries = self.visible_navbar_entries().peekable();
         let first_entry = entries.peek().map(|(index, _)| (0, *index));
@@ -3222,10 +3298,8 @@ impl SettingsWindow {
                                                     subcategory = subcategory
                                                 );
 
-                                                this.open_and_scroll_to_navbar_entry(
+                                                this.activate_navbar_entry(
                                                     entry_index,
-                                                    None,
-                                                    true,
                                                     window,
                                                     cx,
                                                 );
@@ -3271,6 +3345,20 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // When a gateway sub-page is already open and its nav entry is re-focused
+        // (focus returns to the rail right after we opened the page), keep the page
+        // and don't steal focus back. Otherwise the nav entry's focus subscription
+        // would clear the freshly-opened connection page on the next frame.
+        if self.navbar_entry == navbar_entry_index
+            && let Some((link, _)) = self.gateway_sub_page_for_nav_entry(navbar_entry_index)
+            && self
+                .sub_page_stack
+                .last()
+                .is_some_and(|sub_page| sub_page.link == link)
+        {
+            return;
+        }
+
         self.open_navbar_entry_page(navbar_entry_index);
         cx.notify();
 
@@ -6333,6 +6421,142 @@ pub mod test {
             assert!(
                 settings_window.skill_creator_page().is_some(),
                 "skill creator page state should exist"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_connections_nav_entries_open_their_sub_pages(cx: &mut gpui::TestAppContext) {
+        use project::Project;
+
+        cx.update(|cx| {
+            register_settings(cx);
+        });
+
+        let app_state = cx.update(|cx| {
+            let app_state = AppState::test(cx);
+            AppState::set_global(app_state.clone(), cx);
+            app_state
+        });
+
+        app_state
+            .fs
+            .as_fake()
+            .insert_tree("/project", serde_json::json!({ "main.rs": "fn main() {}" }))
+            .await;
+
+        let project = cx.update(|cx| {
+            Project::local(
+                app_state.client.clone(),
+                app_state.node_runtime.clone(),
+                app_state.user_store.clone(),
+                app_state.languages.clone(),
+                app_state.fs.clone(),
+                None,
+                project::LocalProjectFlags::default(),
+                cx,
+            )
+        });
+        project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree("/project", true, cx)
+            })
+            .await
+            .expect("Failed to create worktree");
+
+        let (_multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| {
+                Workspace::new(
+                    Default::default(),
+                    project.clone(),
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace_handle = cx.window_handle().downcast::<MultiWorkspace>().unwrap();
+
+        cx.run_until_parked();
+
+        let (settings_window, cx) = cx
+            .add_window_view(|window, cx| SettingsWindow::new(Some(workspace_handle), window, cx));
+
+        cx.run_until_parked();
+
+        fn nav_entry_index(settings_window: &SettingsWindow, title: &str) -> Option<usize> {
+            settings_window
+                .navbar_entries
+                .iter()
+                .position(|entry| entry.title == title && !entry.is_root)
+        }
+
+        settings_window.update_in(cx, |settings_window, window, cx| {
+            // Every Connections section is a pure gateway, so its nav entry resolves
+            // to the connection's sub-page link.
+            for (section, link_title) in [
+                ("Account", "Account"),
+                ("Broker connections", "Connect a broker"),
+                ("Data sources", "Data sources"),
+                ("QuantConnect", "Connect QuantConnect"),
+            ] {
+                let idx = nav_entry_index(settings_window, section)
+                    .unwrap_or_else(|| panic!("`{section}` nav entry should exist"));
+                let resolved = settings_window
+                    .gateway_sub_page_for_nav_entry(idx)
+                    .unwrap_or_else(|| panic!("`{section}` should be a gateway"));
+                assert_eq!(resolved.0.title, link_title);
+            }
+
+            // A section that holds real settings is NOT a gateway and keeps the
+            // default scroll-to-section behaviour.
+            if let Some(privacy_idx) = nav_entry_index(settings_window, "Privacy") {
+                assert!(
+                    settings_window
+                        .gateway_sub_page_for_nav_entry(privacy_idx)
+                        .is_none(),
+                    "a settings section must not be treated as a gateway"
+                );
+            }
+
+            // Activating the "Data sources" entry opens its sub-page directly — the
+            // routing the bug report said was missing. (Data sources is used here
+            // because its sub-page builds no network-fetching entity.)
+            let data_idx = nav_entry_index(settings_window, "Data sources")
+                .expect("`Data sources` nav entry should exist");
+            settings_window.activate_navbar_entry(data_idx, window, cx);
+        });
+
+        cx.run_until_parked();
+
+        settings_window.update_in(cx, |settings_window, window, cx| {
+            assert_eq!(
+                settings_window
+                    .sub_page_stack
+                    .last()
+                    .map(|sub_page| sub_page.link.title.to_string()),
+                Some("Data sources".to_string()),
+                "clicking the Data sources nav entry should open its sub-page"
+            );
+
+            // The nav entry's focus subscription re-fires when focus returns to the
+            // rail; the open gateway page must survive that, not be torn down.
+            let data_idx = nav_entry_index(settings_window, "Data sources")
+                .expect("`Data sources` nav entry should exist");
+            settings_window.open_and_scroll_to_navbar_entry(data_idx, None, false, window, cx);
+
+            assert_eq!(
+                settings_window.sub_page_stack.len(),
+                1,
+                "re-focusing the nav entry must preserve the open sub-page"
+            );
+            assert_eq!(
+                settings_window
+                    .sub_page_stack
+                    .last()
+                    .map(|sub_page| sub_page.link.title.to_string()),
+                Some("Data sources".to_string()),
             );
         });
     }
