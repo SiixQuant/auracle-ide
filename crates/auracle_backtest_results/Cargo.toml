@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 auracle_charts.workspace = true
 auracle_connections.workspace = true
-auracle_deploy_gate.workspace = true
+auracle_actions.workspace = true
 auracle_studio_results.workspace = true
 gpui.workspace = true
 runs_dock.workspace = true

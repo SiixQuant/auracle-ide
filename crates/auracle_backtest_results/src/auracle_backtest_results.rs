@@ -12,8 +12,8 @@
 //! the same engine payload reads identically on both surfaces. This file is the
 //! render + async-I/O shell over those pure decisions.
 
+use auracle_actions::{DeployDecision, decide_deploy, poll_live_permission};
 use auracle_connections::post_json;
-use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
 use auracle_studio_results::{
     DiagFetchOutcome, StudioDiagnostics, classify_diag_fetch, fmt_count, fmt_money, fmt_pct,
     fmt_ratio, fmt_turns, robustness_verdict, verdict_text,
@@ -69,7 +69,7 @@ pub struct BacktestResultsView {
     deploy: DeployState,
     /// Two-step guard for a live (real-money) deploy: armed on the first click,
     /// sent only on the confirming second click — the exact contract the cockpit
-    /// uses, via the shared `auracle_deploy_gate`.
+    /// uses, via the shared `auracle_actions` verb core.
     awaiting_live_confirm: bool,
     _deploy_task: Option<Task<()>>,
     _diagnostics_task: Option<Task<()>>,
@@ -174,12 +174,26 @@ impl BacktestResultsView {
         self.deploy = DeployState::Running;
         cx.notify();
         self._deploy_task = Some(cx.spawn(async move |this, cx| {
-            let live_allowed = poll_live_allowed(http.clone()).await;
-            let decision = decide_deploy(awaiting, live_allowed);
+            let permission = poll_live_permission(http.clone()).await;
+            let decision = decide_deploy(awaiting, permission);
             if decision == DeployDecision::ArmConfirm {
                 this.update(cx, |this, cx| {
                     this.awaiting_live_confirm = true;
                     this.deploy = DeployState::Idle;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            }
+            // Live permission couldn't be verified (engine outage / malformed
+            // capabilities): surface it honestly and stop — never silently fall
+            // through to a paper deploy the user didn't ask for.
+            if decision == DeployDecision::BlockedUnverified {
+                this.update(cx, |this, cx| {
+                    this.awaiting_live_confirm = false;
+                    this.deploy = DeployState::Failed(
+                        "Couldn't verify live permission — check the engine and retry.".into(),
+                    );
                     cx.notify();
                 })
                 .ok();

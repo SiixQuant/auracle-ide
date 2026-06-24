@@ -16,6 +16,7 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auracle_account",
+    "crates/auracle_actions",
     "crates/auracle_agent_commands",
     "crates/auracle_ai_settings",
     "crates/auracle_backtest_results",
@@ -30,7 +31,6 @@ members = [
     "crates/auracle_qc_import",
     "crates/auracle_qc_import_view",
     "crates/auracle_data_sources",
-    "crates/auracle_deploy_gate",
     "crates/auracle_desk",
     "crates/auracle_desk_panel",
     "crates/auracle_feeds",
@@ -468,6 +468,7 @@ rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 auracle_account = { path = "crates/auracle_account" }
+auracle_actions = { path = "crates/auracle_actions" }
 auracle_agent_commands = { path = "crates/auracle_agent_commands" }
 auracle_ai_settings = { path = "crates/auracle_ai_settings" }
 auracle_backtest_results = { path = "crates/auracle_backtest_results" }
@@ -482,7 +483,6 @@ auracle_connections = { path = "crates/auracle_connections" }
 auracle_data_sources = { path = "crates/auracle_data_sources" }
 auracle_qc_import = { path = "crates/auracle_qc_import" }
 auracle_qc_import_view = { path = "crates/auracle_qc_import_view" }
-auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_desk = { path = "crates/auracle_desk" }
 auracle_desk_panel = { path = "crates/auracle_desk_panel" }
 auracle_feeds = { path = "crates/auracle_feeds" }
