@@ -173,6 +173,7 @@ auracle_cockpit.workspace = true
 auracle_connect.workspace = true
 auracle_connections.workspace = true
 auracle_desk_panel.workspace = true
+auracle_qc_import_view.workspace = true
 auracle_onboarding.workspace = true
 auracle_status.workspace = true
 blotter_panel.workspace = true

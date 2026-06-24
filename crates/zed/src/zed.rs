@@ -5571,6 +5571,7 @@ mod tests {
             schedules_panel::init(cx);
             auracle_agent_commands::init(cx);
             auracle_connect::init(cx);
+            auracle_qc_import_view::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
             copilot_chat::init(

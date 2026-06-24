@@ -35,7 +35,7 @@ pub(crate) fn render_quantconnect_page(
     settings_window: &SettingsWindow,
     _scroll_handle: &ScrollHandle,
     _window: &mut Window,
-    _cx: &mut Context<SettingsWindow>,
+    cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let Some(page) = settings_window.quantconnect_connect_page() else {
         return Label::new("Loading QuantConnect…")
@@ -43,5 +43,32 @@ pub(crate) fn render_quantconnect_page(
             .color(Color::Muted)
             .into_any_element();
     };
-    page.into_any_element()
+    // The connect form owns its own scroll; pin the import hand-off below it. The
+    // import tab lives in the workspace window, so opening it from this (separate)
+    // settings window dispatches across to the original workspace — the same
+    // cross-window hand-off the "Manage Trust" banner uses.
+    let original_window = settings_window.original_window;
+    v_flex()
+        .size_full()
+        .child(div().flex_1().min_h_0().child(page))
+        .child(
+            h_flex().px_8().pb_4().justify_end().child(
+                Button::new("qc-open-import", "Import projects →")
+                    .style(ButtonStyle::Subtle)
+                    .on_click(cx.listener(move |_settings_window, _, _window, cx| {
+                        if let Some(original_window) = original_window {
+                            original_window
+                                .update(cx, |multi_workspace, window, cx| {
+                                    multi_workspace.workspace().update(cx, |workspace, cx| {
+                                        auracle_qc_import_view::open_qc_import(
+                                            workspace, window, cx,
+                                        );
+                                    });
+                                })
+                                .ok();
+                        }
+                    })),
+            ),
+        )
+        .into_any_element()
 }
