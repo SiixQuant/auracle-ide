@@ -1411,6 +1411,10 @@ name = "auracle_ai_settings"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_artifact"
+version = "0.1.0"
+
+[[package]]
 name = "auracle_backtest_results"
 version = "0.1.0"
 dependencies = [
