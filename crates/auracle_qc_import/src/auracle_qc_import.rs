@@ -170,7 +170,9 @@ impl ImportState {
         let Some(report) = &self.coverage else {
             return Vec::new();
         };
-        let pct = (report.coverage * 100.0).round() as i64;
+        // Floor, never round: 199/200 mapped is "99%", not a reassuring "100%"
+        // sitting above a "couldn't map 1 construct" warning.
+        let pct = (report.coverage * 100.0).floor() as i64;
         vec![
             StatCell {
                 label: "Style".to_string(),
@@ -334,6 +336,20 @@ mod tests {
     #[test]
     fn coverage_stats_empty_without_report() {
         assert!(ImportState::browsing().coverage_stats().is_empty());
+    }
+
+    #[test]
+    fn coverage_stats_floors_never_rounds_up_to_100() {
+        let mut state = ImportState::browsing();
+        state.select_project(7);
+        // 199/200 mapped: must read "99%", never a reassuring "100%" on top of an
+        // unmapped-construct warning.
+        state.set_coverage(report("framework", 0.996, &["A"], &["B"]));
+        let stats = state.coverage_stats();
+        assert!(stats.contains(&StatCell {
+            label: "Coverage".to_string(),
+            value: "99%".to_string()
+        }));
     }
 
     #[test]
