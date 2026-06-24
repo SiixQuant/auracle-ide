@@ -1414,9 +1414,9 @@ version = "0.1.0"
 name = "auracle_backtest_results"
 version = "0.1.0"
 dependencies = [
+ "auracle_actions",
  "auracle_charts",
  "auracle_connections",
- "auracle_deploy_gate",
  "auracle_studio_results",
  "gpui",
  "runs_dock",
@@ -1447,10 +1447,10 @@ name = "auracle_cockpit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "auracle_actions",
  "auracle_backtest_results",
  "auracle_cockpit_state",
  "auracle_connections",
- "auracle_deploy_gate",
  "auracle_studio_results",
  "editor",
  "gpui",
@@ -1511,14 +1511,6 @@ dependencies = [
 [[package]]
 name = "auracle_data_sources"
 version = "0.1.0"
-
-[[package]]
-name = "auracle_deploy_gate"
-version = "0.1.0"
-dependencies = [
- "auracle_connections",
- "http_client",
-]
 
 [[package]]
 name = "auracle_desk"

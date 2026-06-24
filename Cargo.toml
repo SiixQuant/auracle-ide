@@ -31,7 +31,6 @@ members = [
     "crates/auracle_qc_import",
     "crates/auracle_qc_import_view",
     "crates/auracle_data_sources",
-    "crates/auracle_deploy_gate",
     "crates/auracle_desk",
     "crates/auracle_desk_panel",
     "crates/auracle_feeds",
@@ -484,7 +483,6 @@ auracle_connections = { path = "crates/auracle_connections" }
 auracle_data_sources = { path = "crates/auracle_data_sources" }
 auracle_qc_import = { path = "crates/auracle_qc_import" }
 auracle_qc_import_view = { path = "crates/auracle_qc_import_view" }
-auracle_deploy_gate = { path = "crates/auracle_deploy_gate" }
 auracle_desk = { path = "crates/auracle_desk" }
 auracle_desk_panel = { path = "crates/auracle_desk_panel" }
 auracle_feeds = { path = "crates/auracle_feeds" }

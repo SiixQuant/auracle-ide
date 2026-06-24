@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 
+use auracle_actions::{DeployDecision, LivePermission, decide_deploy, poll_live_permission};
 use auracle_backtest_results::open_backtest_results;
 use auracle_cockpit_state::{
     ActionAffordance, FeedState, ResolveState, backtest_affordance, deploy_affordance,
@@ -26,7 +27,6 @@ use auracle_cockpit_state::{
     validate_affordance,
 };
 use auracle_connections::{get_json, post_json};
-use auracle_deploy_gate::{DeployDecision, decide_deploy, poll_live_allowed};
 use auracle_studio_results::{BacktestSummary, backtest_oneline};
 use editor::Editor;
 use gpui::{Context, EventEmitter, Task, WeakEntity};
@@ -154,7 +154,10 @@ impl StrategyCockpit {
 
             let (feed, live_allowed) = if let ResolveState::Strategy(strategy_path) = &resolution {
                 let feed = poll_feed(http.clone(), strategy_path).await;
-                let live_allowed = poll_live_allowed(http.clone()).await;
+                // Resolve-time snapshot for the affordance display only; the
+                // money-safe gate is re-checked FRESH at click time below.
+                let live_allowed =
+                    poll_live_permission(http.clone()).await == LivePermission::Allowed;
                 (feed, live_allowed)
             } else {
                 (FeedState::Unknown, false)
@@ -269,13 +272,26 @@ impl StrategyCockpit {
         self.deploy = ActionState::Running;
         cx.notify();
         self._action_task = Some(cx.spawn(async move |this, cx| {
-            let live_allowed = poll_live_allowed(http.clone()).await;
-            let decision = decide_deploy(awaiting, live_allowed);
+            let permission = poll_live_permission(http.clone()).await;
+            let decision = decide_deploy(awaiting, permission);
             if decision == DeployDecision::ArmConfirm {
                 this.update(cx, |this, cx| {
                     this.deploy_live_allowed = true;
                     this.deploy = ActionState::Idle;
                     this.awaiting_live_confirm = true;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            }
+            // Couldn't verify live permission (engine outage / malformed): stop
+            // and say so — never silently fall through to a paper deploy.
+            if decision == DeployDecision::BlockedUnverified {
+                this.update(cx, |this, cx| {
+                    this.awaiting_live_confirm = false;
+                    this.deploy = ActionState::Error(
+                        "Couldn't verify live permission — check the engine and retry.".into(),
+                    );
                     cx.notify();
                 })
                 .ok();
@@ -288,7 +304,7 @@ impl StrategyCockpit {
             });
             let result = post_json(http, "/ui/api/deploy/new", body).await;
             this.update(cx, |this, cx| {
-                this.deploy_live_allowed = live_allowed;
+                this.deploy_live_allowed = permission == LivePermission::Allowed;
                 this.awaiting_live_confirm = false;
                 this.deploy = match result {
                     Ok(value) => ActionState::Ok(deploy_summary(&value, paper)),
