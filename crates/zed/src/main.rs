@@ -749,9 +749,13 @@ fn main() {
         blotter_panel::init(cx);
         auracle_desk_panel::init(cx);
         validation_rail::init(cx);
+        strategies_panel::init(cx);
+        schedules_panel::init(cx);
+        auracle_agent_commands::init(cx);
         auracle_connect::init(cx);
         auracle_connections::init(cx);
         auracle_onboarding::init(cx);
+        auracle_qc_import_view::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
