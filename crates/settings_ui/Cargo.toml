@@ -21,6 +21,7 @@ auracle_account.workspace = true
 auracle_ai_settings.workspace = true
 auracle_connections.workspace = true
 auracle_data_sources.workspace = true
+auracle_qc_import_view.workspace = true
 auracle_settings_nav.workspace = true
 auracle_system_prompt.workspace = true
 auracle_view_state.workspace = true

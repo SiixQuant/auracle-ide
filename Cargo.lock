@@ -1565,6 +1565,23 @@ name = "auracle_pill"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_qc_import"
+version = "0.1.0"
+
+[[package]]
+name = "auracle_qc_import_view"
+version = "0.1.0"
+dependencies = [
+ "auracle_connections",
+ "auracle_qc_import",
+ "gpui",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_runway"
 version = "0.1.0"
 
@@ -16924,6 +16941,7 @@ dependencies = [
  "auracle_ai_settings",
  "auracle_connections",
  "auracle_data_sources",
+ "auracle_qc_import_view",
  "auracle_settings_nav",
  "auracle_system_prompt",
  "auracle_view_state",
@@ -23242,6 +23260,7 @@ dependencies = [
  "auracle_connections",
  "auracle_desk_panel",
  "auracle_onboarding",
+ "auracle_qc_import_view",
  "auracle_status",
  "auto_update",
  "auto_update_ui",

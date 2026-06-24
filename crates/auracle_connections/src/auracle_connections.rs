@@ -39,7 +39,9 @@ actions!(
     auracle,
     [
         /// Open the broker connection page in Settings.
-        OpenBrokerWizard
+        OpenBrokerWizard,
+        /// Open the Import-from-QuantConnect workspace tab.
+        OpenQuantConnectImport
     ]
 );
 
