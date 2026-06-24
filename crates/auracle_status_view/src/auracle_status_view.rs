@@ -122,6 +122,49 @@ pub fn chip_view(facts: EngineFacts) -> ChipView {
     }
 }
 
+/// Parsed QuantConnect connection facts, extracted from
+/// `GET /ui/api/quantconnect/connection` by the gpui poll (never http/serde here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QcFacts {
+    /// No QC credentials configured, or the engine endpoint isn't deployed.
+    NotConnected,
+    /// Credentials present, probe in flight.
+    Checking,
+    /// Authenticated: the (non-secret) user id + how many projects are visible.
+    Connected { user_id: String, projects: u32 },
+}
+
+/// Map QuantConnect facts to the honest chip text, tone, and tooltip. `Good`
+/// only when actually connected — never claims a connection from a stale or
+/// in-flight probe, and never echoes the API token.
+pub fn qc_chip_view(facts: QcFacts) -> ChipView {
+    match facts {
+        QcFacts::NotConnected => ChipView {
+            label: "QuantConnect: off".to_string(),
+            tone: ChipTone::Muted,
+            tooltip: "QuantConnect isn't connected. Add a user ID + API token in \
+                      Settings to import your LEAN strategies."
+                .to_string(),
+        },
+        QcFacts::Checking => ChipView {
+            label: "QuantConnect: checking…".to_string(),
+            tone: ChipTone::Checking,
+            tooltip: "Checking your QuantConnect connection — usually a moment.".to_string(),
+        },
+        QcFacts::Connected { user_id, projects } => {
+            let plural = if projects == 1 { "project" } else { "projects" };
+            ChipView {
+                label: "QuantConnect: connected".to_string(),
+                tone: ChipTone::Good,
+                tooltip: format!(
+                    "Connected to QuantConnect as user {user_id} · {projects} {plural} \
+                     available to import."
+                ),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +263,40 @@ mod tests {
             capability_plain: String::new(),
         });
         assert!(view.tooltip.contains("paper stays the default"));
+    }
+
+    #[test]
+    fn qc_not_connected_is_muted_with_settings_hint() {
+        let view = qc_chip_view(QcFacts::NotConnected);
+        assert_eq!(view.label, "QuantConnect: off");
+        assert_eq!(view.tone, ChipTone::Muted);
+        assert!(view.tooltip.contains("Settings"));
+    }
+
+    #[test]
+    fn qc_checking_is_checking_not_good() {
+        assert_eq!(qc_chip_view(QcFacts::Checking).tone, ChipTone::Checking);
+        assert_ne!(qc_chip_view(QcFacts::Checking).tone, ChipTone::Good);
+    }
+
+    #[test]
+    fn qc_connected_is_good_with_user_and_count() {
+        let view = qc_chip_view(QcFacts::Connected {
+            user_id: "123456".to_string(),
+            projects: 7,
+        });
+        assert_eq!(view.tone, ChipTone::Good);
+        assert!(view.tooltip.contains("123456"));
+        assert!(view.tooltip.contains("7 projects"));
+    }
+
+    #[test]
+    fn qc_single_project_reads_singular() {
+        let view = qc_chip_view(QcFacts::Connected {
+            user_id: "1".to_string(),
+            projects: 1,
+        });
+        assert!(view.tooltip.contains("1 project "));
+        assert!(!view.tooltip.contains("1 projects"));
     }
 }
