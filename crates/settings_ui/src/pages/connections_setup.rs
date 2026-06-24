@@ -27,3 +27,21 @@ pub(crate) fn render_connections_page(
     };
     page.into_any_element()
 }
+
+/// The native "Connect QuantConnect" sub-page. Like the broker page, it defers to
+/// a dedicated entity (`auracle_connections::QuantConnectConnect`) whose credential
+/// editors must survive re-renders, showing a loading hint until it exists.
+pub(crate) fn render_quantconnect_page(
+    settings_window: &SettingsWindow,
+    _scroll_handle: &ScrollHandle,
+    _window: &mut Window,
+    _cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let Some(page) = settings_window.quantconnect_connect_page() else {
+        return Label::new("Loading QuantConnect…")
+            .size(LabelSize::Small)
+            .color(Color::Muted)
+            .into_any_element();
+    };
+    page.into_any_element()
+}

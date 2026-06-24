@@ -917,6 +917,13 @@ pub struct SettingsWindow {
     /// Keeps the broker-connect page's `DismissEvent` subscription alive (it pops
     /// the sub-page once a connection saves). Dropped with the page on pop.
     broker_connect_subscription: Option<Subscription>,
+    /// The live "Connect QuantConnect" sub-page entity. Like the broker page it
+    /// holds credential editors whose focus must survive re-renders, so it is
+    /// built when the sub-page is pushed and cleared when it is popped.
+    quantconnect_connect_page: Option<Entity<auracle_connections::QuantConnectConnect>>,
+    /// Keeps the QuantConnect page's `DismissEvent` subscription alive (it pops the
+    /// sub-page once the credentials save). Dropped with the page on pop.
+    quantconnect_connect_subscription: Option<Subscription>,
     /// State for the native "Agent rules" sub-page, resolved asynchronously when
     /// the page is pushed (the prompt store loads async and `AGENTS.md` existence
     /// is an async `fs` stat) and cleared when it is popped. `None` until ready;
@@ -1576,6 +1583,11 @@ enum SubPageType {
     /// survive re-renders) is built when the page is pushed and dropped when it
     /// is popped — mirroring [`SubPageType::AiProviders`].
     BrokerConnect,
+    /// The native "Connect QuantConnect" sub-page on the Connections page. Tagged
+    /// like [`SubPageType::BrokerConnect`] so its backing entity (which holds the
+    /// credential editors whose focus must survive re-renders) is built on push
+    /// and dropped on pop.
+    QuantConnectConnect,
     /// The native "Agent rules" sub-page on the AI page. Tagged so the real
     /// prompt store (Zed's reusable rules library) is resolved when the page is
     /// pushed — letting the render read its rule metadata synchronously — and the
@@ -1944,6 +1956,8 @@ impl SettingsWindow {
             ai_providers_page: None,
             broker_connect_page: None,
             broker_connect_subscription: None,
+            quantconnect_connect_page: None,
+            quantconnect_connect_subscription: None,
             agent_rules: None,
         };
 
@@ -4180,6 +4194,22 @@ impl SettingsWindow {
             ));
             self.broker_connect_page = Some(page);
         }
+        // Build the "Connect QuantConnect" entity here for the same reason as the
+        // broker page — its credential editors must keep focus across renders —
+        // and pop the sub-page once the credentials save.
+        if sub_page_link.r#type == SubPageType::QuantConnectConnect
+            && self.quantconnect_connect_page.is_none()
+        {
+            let page = cx.new(|cx| auracle_connections::QuantConnectConnect::new(window, cx));
+            self.quantconnect_connect_subscription = Some(cx.subscribe_in(
+                &page,
+                window,
+                |settings_window, _page, _event: &gpui::DismissEvent, window, cx| {
+                    settings_window.pop_sub_page(window, cx);
+                },
+            ));
+            self.quantconnect_connect_page = Some(page);
+        }
         // Resolve the "Agent rules" sub-page state when it is pushed. The prompt
         // store loads asynchronously and `AGENTS.md` existence is an async `fs`
         // stat, so we gather everything off the render thread, cache it, and
@@ -4229,6 +4259,12 @@ impl SettingsWindow {
 
     pub(crate) fn broker_connect_page(&self) -> Option<Entity<auracle_connections::BrokerWizard>> {
         self.broker_connect_page.clone()
+    }
+
+    pub(crate) fn quantconnect_connect_page(
+        &self,
+    ) -> Option<Entity<auracle_connections::QuantConnectConnect>> {
+        self.quantconnect_connect_page.clone()
     }
 
     pub(crate) fn agent_rules(&self) -> Option<&AgentRulesState> {
@@ -4446,6 +4482,12 @@ impl SettingsWindow {
                 SubPageType::BrokerConnect => {
                     self.broker_connect_page = None;
                     self.broker_connect_subscription = None;
+                }
+                // Drop the QuantConnect page (credential editors + dismiss
+                // subscription) so the next open reflects current connection state.
+                SubPageType::QuantConnectConnect => {
+                    self.quantconnect_connect_page = None;
+                    self.quantconnect_connect_subscription = None;
                 }
                 // Drop the cached rules state so the next open re-resolves the
                 // store and re-stats the files, reflecting current contents.
@@ -5271,6 +5313,8 @@ pub mod test {
                 ai_providers_page: None,
                 broker_connect_page: None,
                 broker_connect_subscription: None,
+                quantconnect_connect_page: None,
+                quantconnect_connect_subscription: None,
                 agent_rules: None,
             }
         }
@@ -5408,6 +5452,8 @@ pub mod test {
             ai_providers_page: None,
             broker_connect_page: None,
             broker_connect_subscription: None,
+            quantconnect_connect_page: None,
+            quantconnect_connect_subscription: None,
             agent_rules: None,
         };
 
