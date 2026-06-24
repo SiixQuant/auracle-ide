@@ -20,7 +20,9 @@
 //! toolchain.
 
 use auracle_connections::{OpenQuantConnectImport, get_json, post_json};
-use auracle_qc_import::{CoverageReport, ImportState, QcProject, StatCell};
+use auracle_qc_import::{
+    Comparison, CoverageReport, DeltaMetric, ImportState, QcProject, StatCell,
+};
 use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, Render, Task, Window};
 use serde::Deserialize;
 use ui::{Banner, Callout, Severity, prelude::*};
@@ -87,6 +89,10 @@ struct TranslateResponse {
     unmapped: Vec<String>,
     #[serde(default)]
     notes: Vec<String>,
+    /// The structure-only Python the translator emitted — what gets landed as the
+    /// Auracle strategy file.
+    #[serde(default)]
+    scaffold: String,
 }
 
 #[derive(Deserialize)]
@@ -95,10 +101,40 @@ struct RawComponent {
     auracle_module: String,
 }
 
-/// The import tab. Holds the pure [`ImportState`] plus the in-flight fetch task.
+#[derive(Deserialize)]
+struct SaveResponse {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CompareResponse {
+    #[serde(default)]
+    rows: Vec<RawDelta>,
+}
+
+#[derive(Deserialize)]
+struct RawDelta {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    quantconnect: String,
+    #[serde(default)]
+    auracle: String,
+    #[serde(default)]
+    delta: String,
+}
+
+/// The import tab. Holds the pure [`ImportState`] plus the in-flight fetch task
+/// and the last scaffold (the I/O payload landed as a strategy — not a view-state
+/// decision, so it stays out of the reducer).
 pub struct QcImportView {
     focus_handle: FocusHandle,
     state: ImportState,
+    scaffold: Option<String>,
+    landing: bool,
     _task: Option<Task<()>>,
 }
 
@@ -107,10 +143,22 @@ impl QcImportView {
         let mut view = Self {
             focus_handle: cx.focus_handle(),
             state: ImportState::browsing(),
+            scaffold: None,
+            landing: false,
             _task: None,
         };
         view.fetch_projects(cx);
         view
+    }
+
+    /// The display name of the currently-selected project, if any.
+    fn selected_project_name(&self) -> Option<String> {
+        let id = self.state.selected?;
+        self.state
+            .projects
+            .iter()
+            .find(|project| project.id == id)
+            .map(|project| project.name.clone())
     }
 
     /// List the connected account's QuantConnect projects. A `connected: false`
@@ -151,6 +199,9 @@ impl QcImportView {
 
     fn select(&mut self, id: u64, cx: &mut Context<Self>) {
         self.state.select_project(id);
+        // The reducer drops the prior project's coverage/comparison/landed flag;
+        // drop the matching scaffold here so a stale one can't be landed.
+        self.scaffold = None;
         cx.notify();
     }
 
@@ -214,13 +265,122 @@ impl QcImportView {
             this.update(cx, |this, cx| {
                 match translated {
                     Ok(value) => match serde_json::from_value::<TranslateResponse>(value) {
-                        Ok(response) => this.state.set_coverage(coverage_from(response)),
+                        Ok(response) => {
+                            this.scaffold = Some(response.scaffold.clone());
+                            this.state.set_coverage(coverage_from(response));
+                        }
                         Err(error) => this
                             .state
                             .fail(format!("Couldn't read translation: {error}.")),
                     },
                     Err(error) => this.state.fail(format!("Translation failed: {error}.")),
                 }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Land the translated scaffold as an Auracle strategy file, then hand off to
+    /// the rest of the platform (it now appears in the backtest/cockpit surfaces)
+    /// and fetch the divergence. One task runs both steps sequentially so the
+    /// in-flight handle is never reassigned mid-flight. Never lands an empty
+    /// scaffold, and surfaces a write failure honestly instead of a silent flip.
+    fn land(&mut self, cx: &mut Context<Self>) {
+        if !self.state.can_land() || self.landing {
+            return;
+        }
+        let Some(project_id) = self.state.selected else {
+            return;
+        };
+        let Some(name) = self.selected_project_name() else {
+            return;
+        };
+        let Some(scaffold) = self.scaffold.clone() else {
+            return;
+        };
+        let strategy_path = strategy_path_for(&name);
+        self.landing = true;
+        self.state.error = None;
+        cx.notify();
+        let http = cx.http_client();
+        self._task = Some(cx.spawn(async move |this, cx| {
+            let saved = post_json(
+                http.clone(),
+                "/ui/api/strategy/source",
+                serde_json::json!({ "strategy_path": strategy_path.clone(), "source": scaffold }),
+            )
+            .await;
+            let landed = this
+                .update(cx, |this, cx| {
+                    this.landing = false;
+                    let landed = match saved {
+                        Ok(value) => match serde_json::from_value::<SaveResponse>(value) {
+                            Ok(save) if save.ok => {
+                                this.state.mark_landed();
+                                true
+                            }
+                            Ok(save) => {
+                                let reason =
+                                    save.error.unwrap_or_else(|| "rejected by engine".into());
+                                this.state
+                                    .fail(format!("Couldn't land strategy: {reason}."));
+                                false
+                            }
+                            Err(error) => {
+                                this.state
+                                    .fail(format!("Couldn't read save result: {error}."));
+                                false
+                            }
+                        },
+                        Err(error) => {
+                            this.state.fail(format!("Couldn't land strategy: {error}."));
+                            false
+                        }
+                    };
+                    cx.notify();
+                    landed
+                })
+                .unwrap_or(false);
+            if !landed {
+                return;
+            }
+            // The comparison route isn't deployed on every engine yet, so any
+            // error (including a route-absent 404) degrades to the honest
+            // `Unavailable` note rather than a fabricated table.
+            let compared = post_json(
+                http,
+                "/ui/api/quantconnect/compare",
+                serde_json::json!({ "project_id": project_id, "strategy_path": strategy_path }),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                let comparison = match compared {
+                    Ok(value) => match serde_json::from_value::<CompareResponse>(value) {
+                        Ok(response) => Comparison::Rows(
+                            response
+                                .rows
+                                .into_iter()
+                                .map(|row| DeltaMetric {
+                                    label: row.label,
+                                    quantconnect: row.quantconnect,
+                                    auracle: row.auracle,
+                                    delta: row.delta,
+                                })
+                                .collect(),
+                        ),
+                        Err(_) => Comparison::Unavailable {
+                            reason: "The engine returned a comparison this version can't read."
+                                .into(),
+                        },
+                    },
+                    Err(_) => Comparison::Unavailable {
+                        reason: "Divergence vs your QuantConnect backtest arrives once the \
+                                 engine comparison route is deployed."
+                            .into(),
+                    },
+                };
+                this.state.set_comparison(comparison);
                 cx.notify();
             })
             .ok();
@@ -280,6 +440,137 @@ impl QcImportView {
                 )
             })
             .into_any_element()
+    }
+
+    /// The hand-off: once a translation exists, offer "Land as strategy"; once
+    /// landed, confirm the path and show the divergence read-out. Hidden entirely
+    /// until there's something to land.
+    fn render_handoff(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.state.coverage.is_none() {
+            return div().into_any_element();
+        }
+        let landed = self.state.landed;
+        let path = strategy_path_for(&self.selected_project_name().unwrap_or_default());
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Button::new(
+                            "qc-land",
+                            if landed { "Landed" } else { "Land as strategy" },
+                        )
+                        .style(ButtonStyle::Filled)
+                        .disabled(landed || self.landing)
+                        .on_click(cx.listener(|this, _, _, cx| this.land(cx))),
+                    )
+                    .when(landed, |this| {
+                        this.child(
+                            Label::new(format!("Saved as {path}"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                    }),
+            )
+            .when(landed, |this| this.child(self.render_divergence()))
+            .into_any_element()
+    }
+
+    /// The divergence read-out between the QuantConnect run and the Auracle run of
+    /// the landed strategy: a row per metric, the honest `Unavailable` note when
+    /// the comparison can't be produced, or an in-flight hint while it loads.
+    fn render_divergence(&self) -> impl IntoElement {
+        if let Some(note) = self.state.comparison_note() {
+            return Callout::new()
+                .severity(Severity::Info)
+                .icon(IconName::Info)
+                .title("Divergence vs QuantConnect")
+                .description(note)
+                .into_any_element();
+        }
+        let rows = self.state.comparison_rows();
+        if rows.is_empty() {
+            return Label::new("Comparing against your QuantConnect backtest…")
+                .size(LabelSize::Small)
+                .color(Color::Muted)
+                .into_any_element();
+        }
+        v_flex()
+            .gap_1()
+            .child(
+                Label::new("Divergence vs QuantConnect")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(divergence_row(
+                "Metric".into(),
+                "QuantConnect".into(),
+                "Auracle".into(),
+                "Δ".into(),
+            ))
+            .children(rows.into_iter().map(|row| {
+                divergence_row(
+                    row.label.into(),
+                    row.quantconnect.into(),
+                    row.auracle.into(),
+                    row.delta.into(),
+                )
+            }))
+            .into_any_element()
+    }
+}
+
+/// One row of the divergence table: metric label, the two side values, and the
+/// signed difference, in fixed columns so they line up.
+fn divergence_row(
+    label: SharedString,
+    quantconnect: SharedString,
+    auracle: SharedString,
+    delta: SharedString,
+) -> impl IntoElement {
+    h_flex()
+        .gap_4()
+        .child(div().w_32().child(Label::new(label).size(LabelSize::Small)))
+        .child(
+            div().w_24().child(
+                Label::new(quantconnect)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            ),
+        )
+        .child(
+            div()
+                .w_24()
+                .child(Label::new(auracle).size(LabelSize::Small)),
+        )
+        .child(
+            div()
+                .w_16()
+                .child(Label::new(delta).size(LabelSize::Small).color(Color::Muted)),
+        )
+}
+
+/// Derive the dotted Auracle strategy path a project lands at, e.g. a project
+/// named "Mean Reversion v2" → `strategies.qc_mean_reversion_v2`. Non-alphanumeric
+/// characters collapse to underscores; an empty slug falls back to `qc_import`.
+fn strategy_path_for(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('_');
+    if slug.is_empty() {
+        "strategies.qc_import".to_string()
+    } else {
+        format!("strategies.qc_{slug}")
     }
 }
 
@@ -384,6 +675,7 @@ impl Render for QcImportView {
                     )
                 })
                 .child(self.render_coverage())
+                .child(self.render_handoff(cx))
                 .into_any_element()
         };
 

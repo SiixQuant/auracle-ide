@@ -45,6 +45,30 @@ pub struct CoverageReport {
     pub notes: Vec<String>,
 }
 
+/// One side-by-side row of the divergence read-out: the same metric from the
+/// QuantConnect backtest and from the Auracle backtest of the translated
+/// strategy, plus the signed difference. All three are display-ready strings
+/// exactly as the engine handed them — never recomputed here — so a missing side
+/// reads as an em dash rather than a fabricated zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeltaMetric {
+    pub label: String,
+    pub quantconnect: String,
+    pub auracle: String,
+    pub delta: String,
+}
+
+/// The divergence between the original QuantConnect run and Auracle's run of the
+/// translated strategy. `Unavailable` is the honest state when one or both sides
+/// haven't been produced (no QC backtest on record, or the engine comparison
+/// route isn't deployed) — surfaced with its reason instead of an all-zero table
+/// that would imply a perfect, verified match.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Comparison {
+    Unavailable { reason: String },
+    Rows(Vec<DeltaMetric>),
+}
+
 /// The whole import view-state, advanced by the pure transitions below and
 /// rendered by the gpui editor-tab item. No http / serde / gpui here.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -57,6 +81,12 @@ pub struct ImportState {
     /// The selected project id, if any.
     pub selected: Option<u64>,
     pub coverage: Option<CoverageReport>,
+    /// The divergence read-out, once a translated strategy has been run and
+    /// compared against its QuantConnect original. `None` until then.
+    pub comparison: Option<Comparison>,
+    /// Set once the translated scaffold has been saved as an Auracle strategy and
+    /// handed off to the cockpit — gates the Land verb so it can't double-land.
+    pub landed: bool,
     /// The last error, surfaced honestly instead of a blank panel.
     pub error: Option<String>,
 }
@@ -88,11 +118,14 @@ impl ImportState {
         self.error = None;
     }
 
-    /// Select a project to translate. Drops any prior coverage so a stale report
-    /// never lingers against a different project.
+    /// Select a project to translate. Drops any prior coverage, comparison, and
+    /// landed flag so nothing from the previously-selected project lingers
+    /// against this one.
     pub fn select_project(&mut self, id: u64) {
         self.selected = Some(id);
         self.coverage = None;
+        self.comparison = None;
+        self.landed = false;
         self.error = None;
     }
 
@@ -157,6 +190,44 @@ impl ImportState {
             },
         ]
     }
+
+    /// Record the divergence read-out between the QuantConnect and Auracle runs.
+    pub fn set_comparison(&mut self, comparison: Comparison) {
+        self.comparison = Some(comparison);
+        self.error = None;
+    }
+
+    /// Mark the translated strategy as landed in Auracle (saved + handed off to
+    /// the cockpit). Idempotent.
+    pub fn mark_landed(&mut self) {
+        self.landed = true;
+    }
+
+    /// The divergence rows to render, or empty when there is no comparison yet or
+    /// it is unavailable (use [`Self::comparison_note`] for the why in that case).
+    pub fn comparison_rows(&self) -> Vec<DeltaMetric> {
+        match &self.comparison {
+            Some(Comparison::Rows(rows)) => rows.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The honest reason the divergence can't be shown, when the comparison is
+    /// unavailable; `None` once real rows exist or before any comparison is run.
+    pub fn comparison_note(&self) -> Option<String> {
+        match &self.comparison {
+            Some(Comparison::Unavailable { reason }) => Some(reason.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the translated project can be landed as an Auracle strategy: a
+    /// translation has been produced and it hasn't already been landed. Coverage
+    /// need not be 100% — a partial scaffold is still a useful starting point, and
+    /// the unmapped TODOs travel with it.
+    pub fn can_land(&self) -> bool {
+        self.coverage.is_some() && !self.landed
+    }
 }
 
 #[cfg(test)]
@@ -203,9 +274,14 @@ mod tests {
     fn select_clears_stale_coverage() {
         let mut state = ImportState::browsing();
         state.set_coverage(report("framework", 1.0, &["AlphaModule"], &[]));
+        state.set_comparison(Comparison::Rows(Vec::new()));
+        state.mark_landed();
         state.select_project(7);
         assert_eq!(state.selected, Some(7));
         assert!(state.coverage.is_none());
+        // The previous project's comparison and landed flag must not linger.
+        assert!(state.comparison.is_none());
+        assert!(!state.landed);
     }
 
     #[test]
@@ -266,5 +342,42 @@ mod tests {
         state.fail("engine unreachable");
         assert!(!state.show_skeleton());
         assert_eq!(state.error.as_deref(), Some("engine unreachable"));
+    }
+
+    #[test]
+    fn can_land_requires_a_translation_and_only_once() {
+        let mut state = ImportState::browsing();
+        assert!(!state.can_land()); // nothing translated yet
+        state.select_project(7);
+        state.set_coverage(report("framework", 0.5, &["AlphaModule"], &["CustomThing"]));
+        assert!(state.can_land()); // partial coverage is still landable
+        state.mark_landed();
+        assert!(!state.can_land()); // never double-land
+    }
+
+    #[test]
+    fn unavailable_comparison_shows_a_note_not_rows() {
+        let mut state = ImportState::browsing();
+        state.set_comparison(Comparison::Unavailable {
+            reason: "Run a backtest on both sides to compare.".to_string(),
+        });
+        assert!(state.comparison_rows().is_empty());
+        assert_eq!(
+            state.comparison_note().as_deref(),
+            Some("Run a backtest on both sides to compare.")
+        );
+    }
+
+    #[test]
+    fn populated_comparison_shows_rows_not_a_note() {
+        let mut state = ImportState::browsing();
+        state.set_comparison(Comparison::Rows(vec![DeltaMetric {
+            label: "Sharpe".to_string(),
+            quantconnect: "1.80".to_string(),
+            auracle: "1.74".to_string(),
+            delta: "-0.06".to_string(),
+        }]));
+        assert_eq!(state.comparison_rows().len(), 1);
+        assert!(state.comparison_note().is_none());
     }
 }
