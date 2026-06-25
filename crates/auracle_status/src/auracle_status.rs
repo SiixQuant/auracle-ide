@@ -109,41 +109,52 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineFacts {
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
         let value: serde_json::Value = serde_json::from_str(&body)?;
-        // An absent or empty active broker is None — never a broker literally
-        // named "none yet"; the reducer renders the honest "no broker yet" form.
-        let broker = value
-            .get("active_broker")
-            .and_then(|v| v.as_str())
-            .filter(|name| !name.is_empty())
-            .map(|name| name.to_string());
-        let live_allowed = value
-            .get("live_allowed")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        // Prefer the active broker's own plain sentence; fall back to
-        // the top-level plain (set when no broker is active yet).
-        let capability_plain = value
-            .get("brokers")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|b| b.get("active").and_then(|a| a.as_bool()).unwrap_or(false))
-            })
-            .and_then(|b| b.get("plain").and_then(|p| p.as_str()))
-            .or_else(|| value.get("plain").and_then(|p| p.as_str()))
-            .unwrap_or("")
-            .to_string();
-        Ok(EngineFacts::Connected {
-            broker,
-            live_allowed,
-            capability_plain,
-        })
+        Ok(facts_from_capabilities(&value))
     }
     .await;
     // Never silently discard a real fetch failure: log it (the error carries no
     // key — the secret only ever lived in the request Cookie header) and fall
     // back to the honest Unreachable chip.
     attempt.log_err().unwrap_or(EngineFacts::Unreachable)
+}
+
+/// Turn a parsed `/ui/api/capabilities` body into the connected facts the chip
+/// renders. Split out of the http path so the brokers extraction is unit-tested
+/// without a live engine.
+fn facts_from_capabilities(value: &serde_json::Value) -> EngineFacts {
+    // An absent or empty active broker is None — never a broker literally
+    // named "none yet"; the reducer renders the honest "no broker yet" form.
+    let broker = value
+        .get("active_broker")
+        .and_then(|v| v.as_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string());
+    let live_allowed = value
+        .get("live_allowed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // Prefer the active broker's own plain sentence. The engine returns
+    // `brokers` as an object keyed by broker name (`{"ibkr": {"active": true,
+    // "plain": …}}`), not an array — find the entry whose value is the active
+    // broker and read its `plain`. Fall back to the top-level `plain`, which the
+    // engine sets only when no broker is active yet.
+    let capability_plain = value
+        .get("brokers")
+        .and_then(|v| v.as_object())
+        .and_then(|brokers| {
+            brokers
+                .values()
+                .find(|b| b.get("active").and_then(|a| a.as_bool()).unwrap_or(false))
+        })
+        .and_then(|b| b.get("plain").and_then(|p| p.as_str()))
+        .or_else(|| value.get("plain").and_then(|p| p.as_str()))
+        .unwrap_or("")
+        .to_string();
+    EngineFacts::Connected {
+        broker,
+        live_allowed,
+        capability_plain,
+    }
 }
 
 impl EventEmitter<()> for AuracleStatus {}
@@ -378,4 +389,68 @@ pub fn register_connections(
     workspace.status_bar().update(cx, |status_bar, cx| {
         status_bar.add_right_item(item, window, cx);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // Mirrors `auracle.orders.broker.capability_matrix()`: `brokers` is an OBJECT
+    // keyed by broker name, each value carrying its own `active` flag and `plain`
+    // sentence — never an array.
+    #[test]
+    fn active_brokers_plain_sentence_reaches_the_tooltip() {
+        let ibkr_plain = "ibkr: can trade US equities; not verified yet: options. \
+             This is your active broker. Real-money trading is paused by your license state.";
+        let value = json!({
+            "active_broker": "ibkr",
+            "live_allowed": false,
+            "brokers": {
+                "alpaca": { "active": false, "plain": "alpaca: can trade US equities." },
+                "ibkr": { "active": true, "plain": ibkr_plain },
+            },
+        });
+
+        let facts = facts_from_capabilities(&value);
+        assert_eq!(
+            facts,
+            EngineFacts::Connected {
+                broker: Some("ibkr".to_string()),
+                live_allowed: false,
+                // The ACTIVE broker's sentence — not the inactive alpaca one, and
+                // not the empty string the old `as_array()` extraction produced.
+                capability_plain: ibkr_plain.to_string(),
+            }
+        );
+
+        // End to end: the reducer must surface that sentence in the chip tooltip.
+        let view = chip_view(facts);
+        assert!(view.tooltip.starts_with(ibkr_plain));
+    }
+
+    // When no broker is active the engine omits per-broker `active: true` and
+    // instead sets a top-level `plain`; the extraction must fall back to it.
+    #[test]
+    fn no_active_broker_falls_back_to_top_level_plain() {
+        let top_plain = "No broker is set as active yet — pick one on the \
+                         Account page when you're ready.";
+        let value = json!({
+            "active_broker": null,
+            "live_allowed": false,
+            "brokers": {
+                "ibkr": { "active": false, "plain": "ibkr: can trade US equities." },
+            },
+            "plain": top_plain,
+        });
+
+        assert_eq!(
+            facts_from_capabilities(&value),
+            EngineFacts::Connected {
+                broker: None,
+                live_allowed: false,
+                capability_plain: top_plain.to_string(),
+            }
+        );
+    }
 }
