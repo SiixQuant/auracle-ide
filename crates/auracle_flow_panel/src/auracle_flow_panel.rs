@@ -19,7 +19,7 @@ use anyhow::Result;
 use auracle_connections::post_json;
 use auracle_flow::{
     CompareRow, FlowNode, FlowView, NODE_H, NODE_W, NodeKind, build_flow, center_of,
-    compare_metrics, fork, move_node, set_summary,
+    compare_metrics, fork, fork_module_path, move_node, set_summary,
 };
 use auracle_strategies::{StrategyListItem, module_to_relpath, strategy_rows};
 use auracle_studio_results::{
@@ -280,23 +280,65 @@ impl FlowPanel {
         .detach();
     }
 
-    /// Fork a node: add a draft child on the canvas and open the parent's file so
-    /// the user can start iterating the variant immediately.
+    /// Fork a node: copy the parent strategy's source to a NEW file so the
+    /// variant is genuinely independent, add a draft child pointing at that new
+    /// file, and open it to iterate. If we can't create the file (no project
+    /// open, parent unreadable, target exists) the draft is left path-less and
+    /// an honest note explains why — never aliasing the parent's file, which
+    /// made fork+compare compare a strategy against itself (P1-17).
     fn fork_node(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.fork_seq += 1;
         let seq = self.fork_seq;
-        if fork(&mut self.view, &id, seq).is_none() {
-            return;
-        }
-        let path = self
+        let parent_path = self
             .view
             .nodes
             .iter()
             .find(|n| n.id == id)
             .and_then(|n| n.path.clone());
+        let new_path = parent_path
+            .as_deref()
+            .and_then(|parent| self.materialize_fork_file(parent, seq, cx));
+        if fork(&mut self.view, &id, seq, new_path.clone()).is_none() {
+            return;
+        }
         cx.notify();
-        if let Some(path) = path {
-            self.open_strategy(path.into(), window, cx);
+        match new_path {
+            Some(path) => self.open_strategy(path.into(), window, cx),
+            None if parent_path.is_some() => {
+                self.note = Some(
+                    "Open this folder as a project to fork — the variant needs an \
+                     editable copy of the strategy file."
+                        .into(),
+                );
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// Copy the parent strategy's source to a new module file (`<module>_forkN`)
+    /// inside the open project, returning the new dotted module path. Returns
+    /// `None` — leaving the draft path-less — when there's no project open, the
+    /// parent file can't be read, or the target already exists (never clobbers).
+    fn materialize_fork_file(&self, parent_module: &str, seq: usize, cx: &App) -> Option<String> {
+        let new_module = fork_module_path(parent_module, seq);
+        let parent_abs = self.resolve_abs(parent_module, cx)?;
+        let new_abs = self.resolve_abs(&new_module, cx)?;
+        if new_abs.exists() {
+            return None;
+        }
+        let source = match std::fs::read_to_string(&parent_abs) {
+            Ok(source) => source,
+            Err(_) => return None,
+        };
+        if let Some(parent_dir) = new_abs.parent() {
+            if std::fs::create_dir_all(parent_dir).is_err() {
+                return None;
+            }
+        }
+        match std::fs::write(&new_abs, source) {
+            Ok(()) => Some(new_module),
+            Err(_) => None,
         }
     }
 
@@ -556,19 +598,23 @@ impl FlowPanel {
                                     )),
                                 )
                             })
-                            .child(
-                                Button::new(
-                                    SharedString::from(format!("flow-cmp-{}", node.id)),
-                                    "Compare",
+                            .when(has_path, |this| {
+                                this.child(
+                                    Button::new(
+                                        SharedString::from(format!("flow-cmp-{}", node.id)),
+                                        "Compare",
+                                    )
+                                    .label_size(LabelSize::XSmall)
+                                    .size(ButtonSize::Compact)
+                                    .toggle_state(selected)
+                                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.toggle_compare(cmp_id.clone(), cx)
+                                        },
+                                    )),
                                 )
-                                .label_size(LabelSize::XSmall)
-                                .size(ButtonSize::Compact)
-                                .toggle_state(selected)
-                                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| this.toggle_compare(cmp_id.clone(), cx),
-                                )),
-                            ),
+                            }),
                     ),
             )
             .into_any_element()

@@ -263,21 +263,27 @@ pub fn move_node(view: &mut FlowView, id: &str, dx: f32, dy: f32) -> bool {
 ///
 /// A draft is a *starting point* — it carries the parent's path so the panel can
 /// open that file to iterate, but it has no metrics of its own until run.
-pub fn fork(view: &mut FlowView, parent_id: &str, draft_seq: usize) -> Option<String> {
-    let (name, path, doc, pos) = {
+pub fn fork(
+    view: &mut FlowView,
+    parent_id: &str,
+    draft_seq: usize,
+    new_path: Option<String>,
+) -> Option<String> {
+    let (name, doc, pos) = {
         let parent = view.nodes.iter().find(|n| n.id == parent_id)?;
-        (
-            parent.name.clone(),
-            parent.path.clone(),
-            parent.doc.clone(),
-            parent.pos,
-        )
+        (parent.name.clone(), parent.doc.clone(), parent.pos)
     };
     let draft_id = format!("draft:{draft_seq}");
     view.nodes.push(FlowNode {
         id: draft_id.clone(),
         name: format!("{name} (fork)"),
-        path,
+        // The draft points at its OWN new file (`new_path`, materialized by
+        // the panel from the parent's source) — NEVER the parent's path.
+        // Sharing the parent's path made editing / running / comparing the
+        // "variant" act on the original, so every compare delta was 0
+        // (P1-17). A `None` path is honest: the draft has no file yet and the
+        // panel disables Run/Compare on it.
+        path: new_path,
         doc,
         bundled: false,
         kind: NodeKind::Draft,
@@ -293,6 +299,18 @@ pub fn fork(view: &mut FlowView, parent_id: &str, draft_seq: usize) -> Option<St
         kind: EdgeKind::Fork,
     });
     Some(draft_id)
+}
+
+/// The dotted module path for a fork of `parent_path`: the same class in a new
+/// module file suffixed `_fork{seq}` (e.g. `strategies.mom.Mom` →
+/// `strategies.mom_fork1.Mom`). The panel copies the parent's source to this
+/// path so the fork is a real, independent strategy rather than an alias of the
+/// original. Pure, so it's unit-tested here and shared with the panel.
+pub fn fork_module_path(parent_path: &str, draft_seq: usize) -> String {
+    match parent_path.rsplit_once('.') {
+        Some((module, class)) => format!("{module}_fork{draft_seq}.{class}"),
+        None => format!("{parent_path}_fork{draft_seq}"),
+    }
 }
 
 /// The center point of a node's card — the anchor edges are drawn between.
@@ -418,15 +436,19 @@ mod tests {
     }
 
     #[test]
-    fn fork_adds_a_draft_child_and_an_edge() {
+    fn fork_points_the_draft_at_its_own_path_not_the_parents() {
         let mut view = build_flow(vec![item("strategies.m.Mom", false)]);
         let parent_id = view.nodes[0].id.clone();
-        let draft = fork(&mut view, &parent_id, 1).expect("parent exists");
+        let new_path = fork_module_path("strategies.m.Mom", 1);
+        let draft = fork(&mut view, &parent_id, 1, Some(new_path.clone())).expect("parent exists");
         assert_eq!(view.nodes.len(), 2);
         let child = view.nodes.iter().find(|n| n.id == draft).unwrap();
         assert_eq!(child.kind, NodeKind::Draft);
         assert_eq!(child.name, "Mom (fork)");
-        assert_eq!(child.path.as_deref(), Some("strategies.m.Mom"));
+        // The draft MUST NOT alias the parent's file (P1-17) — that made
+        // fork+compare compare a strategy against itself.
+        assert_eq!(child.path.as_deref(), Some("strategies.m_fork1.Mom"));
+        assert_ne!(child.path.as_deref(), Some("strategies.m.Mom"));
         assert!(child.summary.is_none());
         assert_eq!(view.edges.len(), 1);
         assert_eq!(view.edges[0].from, parent_id);
@@ -434,9 +456,32 @@ mod tests {
     }
 
     #[test]
+    fn fork_with_no_new_file_leaves_the_draft_path_less() {
+        // When the panel can't materialize a file (no project open, etc.) the
+        // draft has no path — honest, and the panel disables Run/Compare.
+        let mut view = build_flow(vec![item("strategies.m.Mom", false)]);
+        let parent_id = view.nodes[0].id.clone();
+        let draft = fork(&mut view, &parent_id, 1, None).expect("parent exists");
+        let child = view.nodes.iter().find(|n| n.id == draft).unwrap();
+        assert_eq!(child.path, None);
+    }
+
+    #[test]
+    fn fork_module_path_suffixes_the_module_keeping_the_class() {
+        assert_eq!(
+            fork_module_path("strategies.example_ma.MACrossover", 1),
+            "strategies.example_ma_fork1.MACrossover",
+        );
+        assert_eq!(fork_module_path("a.B", 2), "a_fork2.B");
+        // No dotted class segment → suffix the whole thing (resolves to no
+        // file, so the panel falls back to a path-less draft).
+        assert_eq!(fork_module_path("solo", 1), "solo_fork1");
+    }
+
+    #[test]
     fn fork_of_a_missing_node_is_a_no_op() {
         let mut view = build_flow(vec![item("a.B", false)]);
-        assert_eq!(fork(&mut view, "nope", 1), None);
+        assert_eq!(fork(&mut view, "nope", 1, Some("a_fork1.B".into())), None);
         assert_eq!(view.nodes.len(), 1);
         assert!(view.edges.is_empty());
     }
@@ -468,7 +513,7 @@ mod tests {
 
     #[test]
     fn center_of_resolves_edge_endpoints() {
-        let mut view = build_flow(vec![item("a.B", false)]);
+        let view = build_flow(vec![item("a.B", false)]);
         let id = view.nodes[0].id.clone();
         let center = center_of(&view, &id).unwrap();
         assert_eq!(center.x, MARGIN + NODE_W / 2.0);
