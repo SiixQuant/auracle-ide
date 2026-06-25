@@ -1393,13 +1393,15 @@ impl SettingsPageItem {
             SettingsPageItem::ConnectionRow(connection_row) => {
                 let expanded = settings_window.expanded_connection == Some(connection_row.key);
 
-                // Connected state comes only from the engine's reported status.
-                // Account/Data have no on/off connection, so their toggle stays
-                // OFF and disabled — honest: the switch never claims a state the
-                // engine hasn't confirmed.
-                let (toggle_connected, toggle_enabled, status_label) = match connection_row.kind {
+                // `connected` is the engine's CONFIRMED truth — it drives the
+                // "Connected" / "Not connected" line and its color, which must
+                // never lie. The SWITCH reflects INTENT: it reads ON when
+                // connected OR while the connect form is open, so a click is
+                // always reflected immediately (turn on → form opens; turn off →
+                // form collapses + disconnects). Account/Data have no connection,
+                // so their switch stays off and disabled.
+                let (connected, toggle_enabled, status_label) = match connection_row.kind {
                     ConnectionKind::Broker => {
-                        // Any non-QuantConnect broker the engine reports connected.
                         let connected =
                             settings_window.connection_is_connected(|id| id != "quantconnect");
                         (
@@ -1429,7 +1431,7 @@ impl SettingsPageItem {
                     ConnectionKind::Data => (false, false, "Open to manage data-source keys"),
                 };
 
-                let toggle_state = if toggle_connected {
+                let toggle_state = if toggle_enabled && (connected || expanded) {
                     ToggleState::Selected
                 } else {
                     ToggleState::Unselected
@@ -1506,7 +1508,7 @@ impl SettingsPageItem {
                                             .child(
                                                 Label::new(status_label)
                                                     .size(LabelSize::Small)
-                                                    .color(if toggle_connected {
+                                                    .color(if connected {
                                                         Color::Success
                                                     } else {
                                                         Color::Muted
@@ -1536,11 +1538,12 @@ impl SettingsPageItem {
                                                         cx,
                                                         |this, cx| {
                                                             if turning_on {
-                                                                // Never optimistically show ON:
-                                                                // open the form so the user can
-                                                                // actually connect; the toggle
-                                                                // flips only once the engine
-                                                                // reports connected.
+                                                                // Open the connect form. The switch
+                                                                // reads ON immediately because the
+                                                                // row is now expanded; the
+                                                                // "Not connected" line still tells
+                                                                // the truth until the engine
+                                                                // confirms the connection.
                                                                 this.expanded_connection =
                                                                     Some(key);
                                                                 match kind {
@@ -1556,12 +1559,25 @@ impl SettingsPageItem {
                                                                     ConnectionKind::Account
                                                                     | ConnectionKind::Data => {}
                                                                 }
-                                                                cx.notify();
                                                             } else {
+                                                                // Collapse the row, and disconnect
+                                                                // if the engine reports it
+                                                                // connected. Collapsing happens
+                                                                // synchronously so the switch
+                                                                // always reacts to the click —
+                                                                // even when nothing was connected
+                                                                // yet (the old path returned early
+                                                                // without notifying).
+                                                                if this.expanded_connection
+                                                                    == Some(key)
+                                                                {
+                                                                    this.expanded_connection = None;
+                                                                }
                                                                 this.disconnect_connection(
                                                                     kind, cx,
                                                                 );
                                                             }
+                                                            cx.notify();
                                                         },
                                                     );
                                                 }
