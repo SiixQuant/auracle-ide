@@ -744,6 +744,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let incidents_panel = incidents_panel::IncidentsPanel::load(workspace_handle.clone(), cx.clone());
         let blotter_panel = blotter_panel::BlotterPanel::load(workspace_handle.clone(), cx.clone());
         let desk_panel = auracle_desk_panel::DeskPanel::load(workspace_handle.clone(), cx.clone());
+        let flow_panel = auracle_flow_panel::FlowPanel::load(workspace_handle.clone(), cx.clone());
         let validation_rail = validation_rail::ValidationRail::load(workspace_handle.clone(), cx.clone());
         let strategies_panel = strategies_panel::StrategiesPanel::load(workspace_handle.clone(), cx.clone());
         let schedules_panel = schedules_panel::SchedulesPanel::load(workspace_handle.clone(), cx.clone());
@@ -779,6 +780,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(incidents_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(blotter_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(desk_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(flow_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(validation_rail, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(strategies_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(schedules_panel, workspace_handle.clone(), cx.clone()),
@@ -5569,6 +5571,7 @@ mod tests {
             validation_rail::init(cx);
             strategies_panel::init(cx);
             schedules_panel::init(cx);
+            auracle_flow_panel::init(cx);
             auracle_agent_commands::init(cx);
             auracle_connect::init(cx);
             auracle_qc_import_view::init(cx);

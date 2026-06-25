@@ -1541,6 +1541,32 @@ name = "auracle_feeds"
 version = "0.1.0"
 
 [[package]]
+name = "auracle_flow"
+version = "0.1.0"
+dependencies = [
+ "auracle_strategies",
+ "auracle_studio_results",
+]
+
+[[package]]
+name = "auracle_flow_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "auracle_flow",
+ "auracle_strategies",
+ "auracle_studio_results",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_onboarding"
 version = "0.1.0"
 dependencies = [
@@ -19003,10 +19029,14 @@ name = "title_bar"
 version = "0.1.0"
 dependencies = [
  "agent_settings",
+ "agent_ui",
  "anyhow",
  "arrayvec",
  "auracle_connect",
+ "auracle_desk_panel",
+ "auracle_flow_panel",
  "auracle_onboarding",
+ "auracle_session",
  "auto_update",
  "call",
  "channel",
@@ -23271,6 +23301,7 @@ dependencies = [
  "auracle_connect",
  "auracle_connections",
  "auracle_desk_panel",
+ "auracle_flow_panel",
  "auracle_onboarding",
  "auracle_qc_import_view",
  "auracle_status",

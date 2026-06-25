@@ -748,6 +748,7 @@ fn main() {
         incidents_panel::init(cx);
         blotter_panel::init(cx);
         auracle_desk_panel::init(cx);
+        auracle_flow_panel::init(cx);
         validation_rail::init(cx);
         strategies_panel::init(cx);
         schedules_panel::init(cx);

@@ -11,8 +11,9 @@
 //! * **D2 — the working context travels.** The session owns the shared context
 //!   (today: the [`ArtifactStore`]); [`Session::switch_shell`] never touches it,
 //!   so an artifact opened in Copilot is the same instance Desk renders.
-//! * **D4 — Flow is v2.** [`Shell::Flow`] is not available yet; switching to it
-//!   is rejected with a reason rather than half-opening an unbuilt surface.
+//! * **D4 — all three shells ship.** [`Shell::Flow`] (the node canvas) now ships
+//!   alongside Desk and Copilot; [`Shell::available`] still gates the switch so a
+//!   future shell can be staged, but no current shell is blocked.
 //!
 //! This crate holds no rendering — each shell renders this state itself.
 
@@ -27,12 +28,13 @@ pub enum Shell {
 }
 
 impl Shell {
-    /// Whether this shell is shippable in v1. Desk and Copilot are; Flow (the
-    /// node canvas) lands in v2, so it reports `false` until then (decision D4).
-    pub fn available_in_v1(self) -> bool {
+    /// Whether this shell is shippable. All three now ship — Flow (the node
+    /// canvas) landed alongside Desk and Copilot. The gate is kept (rather than
+    /// hard-coding `true`) so a future shell can be staged behind it without
+    /// re-plumbing [`selectable`] or [`Session::switch_shell`].
+    pub fn available(self) -> bool {
         match self {
-            Shell::Desk | Shell::Copilot => true,
-            Shell::Flow => false,
+            Shell::Desk | Shell::Copilot | Shell::Flow => true,
         }
     }
 
@@ -40,7 +42,7 @@ impl Shell {
     pub fn selectable() -> Vec<Shell> {
         [Shell::Desk, Shell::Copilot, Shell::Flow]
             .into_iter()
-            .filter(|shell| shell.available_in_v1())
+            .filter(|shell| shell.available())
             .collect()
     }
 }
@@ -94,7 +96,7 @@ impl Session {
         if to == self.active_shell {
             return SwitchOutcome::AlreadyActive;
         }
-        if !to.available_in_v1() {
+        if !to.available() {
             return SwitchOutcome::Blocked {
                 reason: format!("{to:?} isn't available yet — it ships in a later version."),
             };
@@ -148,24 +150,21 @@ mod tests {
     }
 
     #[test]
-    fn flow_is_blocked_in_v1_and_leaves_the_active_shell_unchanged() {
+    fn switching_to_flow_now_works() {
         let mut session = Session::new();
-        session.switch_shell(Shell::Copilot);
-        let outcome = session.switch_shell(Shell::Flow);
-        assert!(matches!(outcome, SwitchOutcome::Blocked { .. }));
-        assert_eq!(
-            session.active_shell(),
-            Shell::Copilot,
-            "a blocked switch must not change the active shell"
-        );
+        assert_eq!(session.switch_shell(Shell::Flow), SwitchOutcome::Switched);
+        assert_eq!(session.active_shell(), Shell::Flow);
     }
 
     #[test]
-    fn selectable_excludes_flow_in_v1() {
-        assert_eq!(Shell::selectable(), vec![Shell::Desk, Shell::Copilot]);
-        assert!(Shell::Desk.available_in_v1());
-        assert!(Shell::Copilot.available_in_v1());
-        assert!(!Shell::Flow.available_in_v1());
+    fn selectable_includes_all_three_shells() {
+        assert_eq!(
+            Shell::selectable(),
+            vec![Shell::Desk, Shell::Copilot, Shell::Flow]
+        );
+        assert!(Shell::Desk.available());
+        assert!(Shell::Copilot.available());
+        assert!(Shell::Flow.available());
     }
 
     #[test]

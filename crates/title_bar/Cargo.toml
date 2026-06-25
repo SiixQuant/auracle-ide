@@ -34,6 +34,7 @@ agent_ui.workspace = true
 anyhow.workspace = true
 auracle_connect.workspace = true
 auracle_desk_panel.workspace = true
+auracle_flow_panel.workspace = true
 auracle_onboarding.workspace = true
 auracle_session.workspace = true
 auto_update.workspace = true

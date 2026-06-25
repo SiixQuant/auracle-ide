@@ -7,6 +7,7 @@ mod update_version;
 use crate::application_menu::{ApplicationMenu, show_menus};
 use agent_settings::{AgentSettings, WindowLayout};
 use agent_ui::AgentPanel;
+use auracle_flow_panel::FlowPanel;
 use arrayvec::ArrayVec;
 use auracle_desk_panel::DeskPanel;
 use auracle_session::{Session, Shell, SwitchOutcome};
@@ -629,10 +630,10 @@ impl TitleBar {
 
     /// The signature "one core, three shells" switcher (decision D1): a compact
     /// segmented control [Desk | Copilot | Flow] living in the title bar. The
-    /// active shell reads from `self.session` and is rendered selected. Desk and
-    /// Copilot switch the session and focus their panel — never a dead control;
-    /// Flow is shown but disabled until v2 (decision D4), with a "Coming soon"
-    /// tooltip so the third shell is visibly promised, not hidden.
+    /// active shell reads from `self.session` and is rendered selected. All three
+    /// shells switch the session and focus their panel — never a dead control. A
+    /// shell that a future build stages behind `Shell::available` would render
+    /// disabled with a "Coming soon" tooltip, but none are staged today.
     fn render_shell_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.session.active_shell();
 
@@ -650,10 +651,10 @@ impl TitleBar {
             .child(self.render_shell_segment(Shell::Flow, "Flow", active, 2, cx))
     }
 
-    /// One segment of the shell switcher. Selectable shells switch the session and
-    /// focus their panel on click; Flow (unavailable in v1) is disabled with a
-    /// "Coming soon" tooltip. `tab_index` is sequential so the group is keyboard
-    /// navigable left-to-right.
+    /// One segment of the shell switcher. Available shells switch the session and
+    /// focus their panel on click; a shell staged behind `Shell::available` (none
+    /// today) would render disabled with a "Coming soon" tooltip. `tab_index` is
+    /// sequential so the group is keyboard navigable left-to-right.
     fn render_shell_segment(
         &self,
         shell: Shell,
@@ -668,7 +669,7 @@ impl TitleBar {
             Shell::Flow => "shell-segment-flow",
         };
         let is_active = shell == active;
-        let available = shell.available_in_v1();
+        let available = shell.available();
 
         let button = Button::new(id, label)
             .label_size(LabelSize::Small)
@@ -686,7 +687,9 @@ impl TitleBar {
                     this.switch_to_shell(shell, window, cx);
                 }))
         } else {
-            // Flow has no action yet (v2) — surface the promise, not a dead click.
+            // A future staged shell — surface the promise, not a dead click.
+            // Unreachable today (all shells are available), kept as the gate's
+            // honest UI for when one is staged behind `Shell::available`.
             button.tooltip(Tooltip::text("Coming soon"))
         }
     }
@@ -731,7 +734,13 @@ impl TitleBar {
                     })
                     .log_err();
             }
-            Shell::Flow => {}
+            Shell::Flow => {
+                self.workspace
+                    .update(cx, |workspace, cx| {
+                        workspace.focus_panel::<FlowPanel>(window, cx);
+                    })
+                    .log_err();
+            }
         }
     }
 
