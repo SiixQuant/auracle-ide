@@ -338,11 +338,16 @@ impl Render for TitleBar {
                                     },
                                 )
                         })
-                        .child(self.render_shell_switcher(cx))
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .into_any_element(),
         );
+
+        // The shell switcher is its own top-level title-bar child (centered by the
+        // platform title bar's `justify_between`) rather than nested inside the left
+        // project-items cluster, so it renders in every workspace state — including
+        // the empty "Open Recent Project" window where the project cluster is bare.
+        children.push(self.render_shell_switcher(cx).into_any_element());
 
         // Auracle does not connect to Zed's collaboration backend, so the
         // collaborator facepile and the call controls below are never rendered.
