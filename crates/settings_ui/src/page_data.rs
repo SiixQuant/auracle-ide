@@ -10,16 +10,16 @@ use theme::SystemAppearance;
 use ui::IntoElement;
 
 use crate::{
-    ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
-    SettingsPage, SettingsPageItem, SubPageLink, SubPageType, USER, active_language,
-    all_language_names,
+    ActionLink, ConnectionKind, ConnectionRow, DynamicItem, PROJECT, SettingField, SettingItem,
+    SettingsFieldMetadata, SettingsPage, SettingsPageItem, SubPageLink, SubPageType, USER,
+    active_language, all_language_names,
     pages::{
-        open_audio_test_window, render_account_page, render_agent_rules_page,
-        render_ai_providers_page, render_connections_page, render_data_sources_page,
-        render_edit_prediction_setup_page, render_quantconnect_page, render_skills_setup_page,
+        open_audio_test_window, render_agent_rules_page, render_ai_providers_page,
+        render_edit_prediction_setup_page, render_skills_setup_page,
         render_tool_permissions_setup_page,
     },
 };
+use ui::IconName;
 
 const DEFAULT_STRING: String = String::new();
 /// A default empty string reference. Useful in `pick` functions for cases either in dynamic item fields, or when dealing with `settings::Maybe`
@@ -88,76 +88,58 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
 fn connections_page() -> SettingsPage {
     SettingsPage {
         title: "Connections",
+        // Each connection is an inline-expand toggle row, not a "Configure →"
+        // sub-page link. Expanding a row renders that connection's existing
+        // connect form in place on this page, so it never pushes onto the
+        // sub-page stack (whose navbar-focus side effect used to wipe a
+        // just-pushed form and bounce the user back to General).
         items: vec![
             SettingsPageItem::SectionHeader("Account"),
-            SettingsPageItem::SubPageLink(SubPageLink {
+            SettingsPageItem::ConnectionRow(ConnectionRow {
+                kind: ConnectionKind::Account,
+                key: "connections.account",
                 title: "Account".into(),
-                r#type: Default::default(),
+                description: "See who is signed in, your plan, and your license status.".into(),
+                icon: IconName::Person,
                 // Deep-link target for `OpenSettingsAt`, so the title-bar menu
-                // and first-run banner can land directly on this page.
+                // and first-run banner can land directly on this row.
                 json_path: Some("connections.account"),
-                description: Some(
-                    "See who's signed in, your plan, and your license status.".into(),
-                ),
-                in_json: false,
-                files: USER,
-                always_visible: true,
-                render: render_account_page,
             }),
             SettingsPageItem::SectionHeader("Broker connections"),
-            SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Connect a broker".into(),
-                // Tagged so the settings window builds the broker-connect entity
-                // (which holds credential editors) on push and drops it on pop,
-                // exactly like the "Model providers" sub-page.
-                r#type: SubPageType::BrokerConnect,
-                // Deep-link target for `OpenBrokerWizard`/`OpenSettingsAt`, so the
-                // deploy gate and command palette can land directly on this page.
-                json_path: Some(auracle_connections::BROKER_CONNECT_SETTINGS_PATH),
-                description: Some(
-                    "Connect a broker to route orders and pull market data. \
+            SettingsPageItem::ConnectionRow(ConnectionRow {
+                kind: ConnectionKind::Broker,
+                key: "connections.broker",
+                title: "Broker connections".into(),
+                description: "Connect a broker to route orders and pull market data. \
                      Each broker shows what it can do before you connect."
-                        .into(),
-                ),
-                in_json: false,
-                files: USER,
-                always_visible: true,
-                render: render_connections_page,
+                    .into(),
+                icon: IconName::Server,
+                // Deep-link target for `OpenBrokerWizard`/`OpenSettingsAt`, so the
+                // deploy gate and command palette can land directly on this row.
+                json_path: Some(auracle_connections::BROKER_CONNECT_SETTINGS_PATH),
             }),
             SettingsPageItem::SectionHeader("Data sources"),
-            SettingsPageItem::SubPageLink(SubPageLink {
+            SettingsPageItem::ConnectionRow(ConnectionRow {
+                kind: ConnectionKind::Data,
+                key: "connections.data",
                 title: "Data sources".into(),
-                r#type: Default::default(),
+                description: "Enter market-data vendor API keys here, stored in the engine vault."
+                    .into(),
+                icon: IconName::DatabaseZap,
                 json_path: None,
-                description: Some(
-                    "See which market-data vendors the engine holds keys for. \
-                     Manage the keys in the launcher."
-                        .into(),
-                ),
-                in_json: false,
-                files: USER,
-                always_visible: true,
-                render: render_data_sources_page,
             }),
             SettingsPageItem::SectionHeader("QuantConnect"),
-            SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Connect QuantConnect".into(),
-                // Tagged so the settings window builds the QuantConnect-connect
-                // entity (which holds the credential editors) on push and drops
-                // it on pop, mirroring the broker-connect sub-page.
-                r#type: SubPageType::QuantConnectConnect,
+            SettingsPageItem::ConnectionRow(ConnectionRow {
+                kind: ConnectionKind::QuantConnect,
+                key: "connections.quantconnect",
+                title: "QuantConnect".into(),
+                description: "Connect QuantConnect to import your LEAN strategies. \
+                     Your API token is stored in the engine vault."
+                    .into(),
+                icon: IconName::BoltOutlined,
                 // Deep-link target for `OpenSettingsAt`, so the connections status
-                // chip can land directly on this page.
+                // chip can land directly on this row.
                 json_path: Some("connections.quantconnect"),
-                description: Some(
-                    "Connect QuantConnect to import your LEAN strategies into \
-                     Auracle. Your API token is stored in the engine vault."
-                        .into(),
-                ),
-                in_json: false,
-                files: USER,
-                always_visible: true,
-                render: render_quantconnect_page,
             }),
         ]
         .into_boxed_slice(),
