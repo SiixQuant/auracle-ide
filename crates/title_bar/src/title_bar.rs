@@ -6,7 +6,10 @@ mod update_version;
 
 use crate::application_menu::{ApplicationMenu, show_menus};
 use agent_settings::{AgentSettings, WindowLayout};
+use agent_ui::AgentPanel;
 use arrayvec::ArrayVec;
+use auracle_desk_panel::DeskPanel;
+use auracle_session::{Session, Shell, SwitchOutcome};
 use git_ui::worktree_picker::WorktreePicker;
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
@@ -208,6 +211,11 @@ pub struct TitleBar {
     /// GitHub is linked — the avatar then renders nothing, never a placeholder.
     github_user: Option<GithubUser>,
     _github_fetch: Task<()>,
+    /// Which of the three co-equal shells (Desk / Copilot / Flow) is active. The
+    /// title-bar switcher is the canonical control for this in v1, so the session
+    /// lives here; later slices can promote it to a shared workspace-scoped entity
+    /// without changing the switcher's contract (decision D1).
+    session: Session,
 }
 
 /// The GitHub identity the engine reports for the connected account, fetched over
@@ -330,6 +338,7 @@ impl Render for TitleBar {
                                     },
                                 )
                         })
+                        .child(self.render_shell_switcher(cx))
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .into_any_element(),
@@ -538,6 +547,7 @@ impl TitleBar {
             _diagnostics_subscription: None,
             github_user: None,
             _github_fetch: Task::ready(()),
+            session: Session::new(),
         };
 
         this.observe_diagnostics(cx);
@@ -610,6 +620,114 @@ impl TitleBar {
             avatar_url: avatar_url.to_string().into(),
             html_url: html_url.to_string().into(),
         })
+    }
+
+    /// The signature "one core, three shells" switcher (decision D1): a compact
+    /// segmented control [Desk | Copilot | Flow] living in the title bar. The
+    /// active shell reads from `self.session` and is rendered selected. Desk and
+    /// Copilot switch the session and focus their panel — never a dead control;
+    /// Flow is shown but disabled until v2 (decision D4), with a "Coming soon"
+    /// tooltip so the third shell is visibly promised, not hidden.
+    fn render_shell_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.session.active_shell();
+
+        // A bordered group so the three segments read as one control. Colours come
+        // entirely from the theme / Button styles — no literals.
+        h_flex()
+            .id("shell-switcher")
+            .ml_1()
+            .gap_px()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().colors().border_variant)
+            .child(self.render_shell_segment(Shell::Desk, "Desk", active, 0, cx))
+            .child(self.render_shell_segment(Shell::Copilot, "Copilot", active, 1, cx))
+            .child(self.render_shell_segment(Shell::Flow, "Flow", active, 2, cx))
+    }
+
+    /// One segment of the shell switcher. Selectable shells switch the session and
+    /// focus their panel on click; Flow (unavailable in v1) is disabled with a
+    /// "Coming soon" tooltip. `tab_index` is sequential so the group is keyboard
+    /// navigable left-to-right.
+    fn render_shell_segment(
+        &self,
+        shell: Shell,
+        label: &'static str,
+        active: Shell,
+        tab_index: isize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = match shell {
+            Shell::Desk => "shell-segment-desk",
+            Shell::Copilot => "shell-segment-copilot",
+            Shell::Flow => "shell-segment-flow",
+        };
+        let is_active = shell == active;
+        let available = shell.available_in_v1();
+
+        let button = Button::new(id, label)
+            .label_size(LabelSize::Small)
+            .size(ButtonSize::Compact)
+            .tab_index(tab_index)
+            .toggle_state(is_active)
+            .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+            .when(!is_active, |this| this.color(Color::Muted))
+            .disabled(!available);
+
+        if available {
+            button
+                .tooltip(Tooltip::text(format!("Switch to the {label} shell")))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.switch_to_shell(shell, window, cx);
+                }))
+        } else {
+            // Flow has no action yet (v2) — surface the promise, not a dead click.
+            button.tooltip(Tooltip::text("Coming soon"))
+        }
+    }
+
+    /// Switch the active shell and focus the shell's panel, so a click always
+    /// *shows* the target shell rather than toggling it shut. A no-op or blocked
+    /// switch (Flow in v1) leaves focus untouched; only a real switch redraws.
+    fn switch_to_shell(&mut self, shell: Shell, window: &mut Window, cx: &mut Context<Self>) {
+        match self.session.switch_shell(shell) {
+            SwitchOutcome::Switched => {
+                self.focus_shell_panel(shell, window, cx);
+                cx.notify();
+            }
+            // Already on this shell: re-focus its panel anyway (the user clicked
+            // it expecting it in front), but no state changed, so no redraw.
+            SwitchOutcome::AlreadyActive => {
+                self.focus_shell_panel(shell, window, cx);
+            }
+            // Flow in v1 — the disabled segment shouldn't reach here, but if it
+            // ever does, honour the core's refusal and do nothing.
+            SwitchOutcome::Blocked { .. } => {}
+        }
+    }
+
+    /// Focus the dock panel backing a shell. Desk → DeskPanel, Copilot → the agent
+    /// panel; both use `focus_panel`, which *opens-and-focuses* (never toggles
+    /// shut). Flow has no panel yet. Failure to upgrade the workspace is logged,
+    /// never panicked.
+    fn focus_shell_panel(&self, shell: Shell, window: &mut Window, cx: &mut Context<Self>) {
+        match shell {
+            Shell::Desk => {
+                self.workspace
+                    .update(cx, |workspace, cx| {
+                        workspace.focus_panel::<DeskPanel>(window, cx);
+                    })
+                    .log_err();
+            }
+            Shell::Copilot => {
+                self.workspace
+                    .update(cx, |workspace, cx| {
+                        workspace.focus_panel::<AgentPanel>(window, cx);
+                    })
+                    .log_err();
+            }
+            Shell::Flow => {}
+        }
     }
 
     /// The GitHub avatar shown left of the settings gear. Renders nothing when no
