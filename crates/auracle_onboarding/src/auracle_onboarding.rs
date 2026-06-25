@@ -160,7 +160,11 @@ fn show_first_run_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>)
 async fn any_broker_connected(http: Arc<dyn http_client::HttpClient>) -> bool {
     auracle_connections::list_brokers(http)
         .await
-        .map(|brokers| brokers.iter().any(|broker| broker.status == "connected"))
+        .map(|brokers| {
+            brokers
+                .iter()
+                .any(|broker| broker.status.state == "connected")
+        })
         .unwrap_or(false)
 }
 
@@ -767,7 +771,7 @@ impl OnboardingWizard {
                     } else {
                         broker.display_label.clone()
                     };
-                    let connected = broker.status == "connected";
+                    let connected = broker.status.state == "connected";
                     list = list.child(
                         Button::new(SharedString::from(broker.id.clone()), title)
                             .style(if connected {
