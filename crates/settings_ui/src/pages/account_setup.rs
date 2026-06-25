@@ -194,14 +194,11 @@ fn personal_setting_row(
         .py_3()
         .gap_4()
         .child(
-            v_flex()
-                .gap_0p5()
-                .child(Label::new(setting.title))
-                .child(
-                    Label::new(setting.description)
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                ),
+            v_flex().gap_0p5().child(Label::new(setting.title)).child(
+                Label::new(setting.description)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            ),
         )
         .child(
             Button::new(("personal-setting", index), "Open")

@@ -930,6 +930,23 @@ pub struct SettingsWindow {
     /// while `None` the page reports the rules library as still loading rather
     /// than claiming zero rules. Backs [`pages::render_agent_rules_page`].
     agent_rules: Option<AgentRulesState>,
+    /// Which inline connection row is currently expanded, by its
+    /// [`ConnectionRow::key`]. Accordion: at most one is open. `None` = all
+    /// collapsed. Expansion renders that connection's connect form in place on
+    /// the Connections page (no sub-page push).
+    expanded_connection: Option<&'static str>,
+    /// The engine's last-known broker connection statuses (from
+    /// `GET /ui/api/connections`), driving each connection toggle's ON/OFF
+    /// state. Refetched on open and after a disconnect; the toggle never shows
+    /// ON unless the engine reports `status == "connected"`.
+    connections_status: Vec<auracle_connections::BrokerSummary>,
+    /// Keeps the in-flight connections-status fetch alive; replaced on each
+    /// (re)load. Mirrors `shared_settings_task`.
+    connections_status_task: Option<Task<()>>,
+    /// Scroll handle for the inline Account / Data-sources connect forms, whose
+    /// render fns take a `&ScrollHandle`. One handle suffices since the
+    /// accordion expands at most one row at a time.
+    connection_content_scroll_handle: ScrollHandle,
 }
 
 /// Resolved inputs for the "Agent rules" sub-page render, gathered once when the
@@ -1023,6 +1040,45 @@ enum SettingsPageItem {
     SubPageLink(SubPageLink),
     DynamicItem(DynamicItem),
     ActionLink(ActionLink),
+    /// An inline-expand connection row (Account / Broker / Data / QuantConnect):
+    /// a native [`Switch`] toggle + chevron whose expansion renders the
+    /// connection's existing connect form *in place* on the Connections page,
+    /// instead of pushing a sub-page (which bounced focus to the navbar and
+    /// wiped the form). See [`SettingsWindow::expanded_connection`].
+    ConnectionRow(ConnectionRow),
+}
+
+/// Which connection a [`ConnectionRow`] represents. Drives both the inline
+/// form rendered on expand and the toggle's connected-state computation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionKind {
+    /// The signed-in operator's account, plan, and license.
+    Account,
+    /// Broker connections (order routing + market data); the row expands the
+    /// full broker picker ([`auracle_connections::BrokerWizard`]).
+    Broker,
+    /// Market-data vendor API keys, stored in the engine vault.
+    Data,
+    /// QuantConnect (LEAN strategy import); expands
+    /// [`auracle_connections::QuantConnectConnect`].
+    QuantConnect,
+}
+
+/// A connection presented as an inline-expand toggle row on the Connections
+/// settings page. Static metadata only — the live connected state comes from
+/// [`SettingsWindow::connections_status`] and the form entities are built on
+/// demand by [`SettingsWindow::ensure_broker_connect_page`] /
+/// [`SettingsWindow::ensure_quantconnect_connect_page`].
+#[derive(Clone, PartialEq)]
+pub(crate) struct ConnectionRow {
+    pub(crate) kind: ConnectionKind,
+    /// Stable accordion key (also the deep-link `json_path` for most rows).
+    pub(crate) key: &'static str,
+    pub(crate) title: SharedString,
+    pub(crate) description: SharedString,
+    pub(crate) icon: IconName,
+    /// See [`SettingField::json_path`]. Deep-link target for `OpenSettingsAt`.
+    pub(crate) json_path: Option<&'static str>,
 }
 
 impl std::fmt::Debug for SettingsPageItem {
@@ -1040,6 +1096,9 @@ impl std::fmt::Debug for SettingsPageItem {
             }
             SettingsPageItem::ActionLink(action_link) => {
                 write!(f, "ActionLink({})", action_link.title)
+            }
+            SettingsPageItem::ConnectionRow(connection_row) => {
+                write!(f, "ConnectionRow({})", connection_row.title)
             }
         }
     }
@@ -1331,6 +1390,218 @@ impl SettingsPageItem {
                 )
                 .when(bottom_border, |this| this.child(Divider::horizontal()))
                 .into_any_element(),
+            SettingsPageItem::ConnectionRow(connection_row) => {
+                let expanded = settings_window.expanded_connection == Some(connection_row.key);
+
+                // Connected state comes only from the engine's reported status.
+                // Account/Data have no on/off connection, so their toggle stays
+                // OFF and disabled — honest: the switch never claims a state the
+                // engine hasn't confirmed.
+                let (toggle_connected, toggle_enabled, status_label) = match connection_row.kind {
+                    ConnectionKind::Broker => {
+                        // Any non-QuantConnect broker the engine reports connected.
+                        let connected =
+                            settings_window.connection_is_connected(|id| id != "quantconnect");
+                        (
+                            connected,
+                            true,
+                            if connected {
+                                "Connected"
+                            } else {
+                                "Not connected"
+                            },
+                        )
+                    }
+                    ConnectionKind::QuantConnect => {
+                        let connected =
+                            settings_window.connection_is_connected(|id| id == "quantconnect");
+                        (
+                            connected,
+                            true,
+                            if connected {
+                                "Connected"
+                            } else {
+                                "Not connected"
+                            },
+                        )
+                    }
+                    ConnectionKind::Account => (false, false, "Open to view your account"),
+                    ConnectionKind::Data => (false, false, "Open to manage data-source keys"),
+                };
+
+                let toggle_state = if toggle_connected {
+                    ToggleState::Selected
+                } else {
+                    ToggleState::Unselected
+                };
+
+                let kind = connection_row.kind;
+                let key = connection_row.key;
+
+                // The inline form, rendered in place below the row when expanded
+                // — never via a pushed sub-page (which bounced focus to the
+                // navbar and wiped the form). Each connection defers to its
+                // existing render fn / entity.
+                let expanded_form = expanded.then(|| {
+                    let scroll_handle = &settings_window.connection_content_scroll_handle;
+                    match connection_row.kind {
+                        ConnectionKind::Broker => crate::pages::render_connections_page(
+                            settings_window,
+                            scroll_handle,
+                            window,
+                            cx,
+                        ),
+                        ConnectionKind::QuantConnect => crate::pages::render_quantconnect_page(
+                            settings_window,
+                            scroll_handle,
+                            window,
+                            cx,
+                        ),
+                        ConnectionKind::Data => crate::pages::render_data_sources_page(
+                            settings_window,
+                            scroll_handle,
+                            window,
+                            cx,
+                        ),
+                        ConnectionKind::Account => crate::pages::render_account_page(
+                            settings_window,
+                            scroll_handle,
+                            window,
+                            cx,
+                        ),
+                    }
+                });
+
+                v_flex()
+                    .group("setting-item")
+                    .px_8()
+                    .child(
+                        h_flex()
+                            .id(connection_row.key)
+                            .w_full()
+                            .min_w_0()
+                            .gap_3()
+                            .justify_between()
+                            .map(apply_padding)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap_3()
+                                    .child(
+                                        Icon::new(connection_row.icon)
+                                            .size(IconSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .child(Label::new(connection_row.title.clone()))
+                                            .child(
+                                                Label::new(connection_row.description.clone())
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted),
+                                            )
+                                            .child(
+                                                Label::new(status_label)
+                                                    .size(LabelSize::Small)
+                                                    .color(if toggle_connected {
+                                                        Color::Success
+                                                    } else {
+                                                        Color::Muted
+                                                    }),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Switch::new((connection_row.key, 0_usize), toggle_state)
+                                            .tab_index(0_isize)
+                                            .disabled(!toggle_enabled)
+                                            // Switch's `on_click` is a plain
+                                            // `Fn(&ToggleState, &mut Window, &mut App)`, not a
+                                            // `cx.listener`, so route mutations back through the
+                                            // settings-window entity handle.
+                                            .on_click({
+                                                let settings_window_entity = cx.entity();
+                                                move |state: &ToggleState, window, cx| {
+                                                    let turning_on =
+                                                        *state == ToggleState::Selected;
+                                                    settings_window_entity.update(
+                                                        cx,
+                                                        |this, cx| {
+                                                            if turning_on {
+                                                                // Never optimistically show ON:
+                                                                // open the form so the user can
+                                                                // actually connect; the toggle
+                                                                // flips only once the engine
+                                                                // reports connected.
+                                                                this.expanded_connection =
+                                                                    Some(key);
+                                                                match kind {
+                                                                    ConnectionKind::Broker => this
+                                                                        .ensure_broker_connect_page(
+                                                                            window, cx,
+                                                                        ),
+                                                                    ConnectionKind::QuantConnect => {
+                                                                        this.ensure_quantconnect_connect_page(
+                                                                            window, cx,
+                                                                        )
+                                                                    }
+                                                                    ConnectionKind::Account
+                                                                    | ConnectionKind::Data => {}
+                                                                }
+                                                                cx.notify();
+                                                            } else {
+                                                                this.disconnect_connection(
+                                                                    kind, cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    );
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            (connection_row.key, 1_usize),
+                                            if expanded {
+                                                IconName::ChevronUp
+                                            } else {
+                                                IconName::ChevronDown
+                                            },
+                                        )
+                                        .icon_size(IconSize::Small)
+                                        .icon_color(Color::Muted)
+                                        .tab_index(0_isize)
+                                        .on_click(cx.listener(
+                                            move |this, _, window, cx| {
+                                                this.toggle_connection_expanded(
+                                                    kind, key, window, cx,
+                                                );
+                                            },
+                                        )),
+                                    ),
+                            )
+                            .child(render_settings_item_link(
+                                connection_row.key,
+                                connection_row.json_path,
+                                false,
+                                settings_window,
+                                cx,
+                            )),
+                    )
+                    .when_some(expanded_form, |this, form| {
+                        this.child(div().w_full().pb_4().child(form))
+                    })
+                    .when(bottom_border, |this| this.child(Divider::horizontal()))
+                    .into_any_element()
+            }
         }
     }
 }
@@ -1959,6 +2230,10 @@ impl SettingsWindow {
             quantconnect_connect_page: None,
             quantconnect_connect_subscription: None,
             agent_rules: None,
+            expanded_connection: None,
+            connections_status: Vec::new(),
+            connections_status_task: None,
+            connection_content_scroll_handle: ScrollHandle::new(),
         };
 
         this.fetch_files(window, cx);
@@ -1966,6 +2241,7 @@ impl SettingsWindow {
         this.build_search_index();
         this.load_account_profile(cx);
         this.load_shared_settings(cx);
+        this.load_connections_status(cx);
 
         this.search_bar.update(cx, |editor, cx| {
             editor.focus_handle(cx).focus(window, cx);
@@ -2018,6 +2294,148 @@ impl SettingsWindow {
             })
             .ok();
         }));
+    }
+
+    /// (Re)fetch the engine's broker connection statuses over loopback, driving
+    /// the inline connection rows' toggle ON/OFF state. A fetch failure leaves
+    /// the statuses empty, so every toggle reads OFF — honest: we never show ON
+    /// unless the engine reports `status == "connected"`. Called on open and
+    /// again after a disconnect so the toggle reflects the new state.
+    pub(crate) fn load_connections_status(&mut self, cx: &mut Context<Self>) {
+        // Capture the http client outside `cx.spawn` so the async block borrows
+        // nothing from `cx` (mirrors `load_shared_settings`).
+        let http_client = cx.http_client();
+        self.connections_status_task = Some(cx.spawn(async move |this, cx| {
+            let brokers = auracle_connections::list_brokers(http_client)
+                .await
+                .unwrap_or_default();
+            this.update(cx, |this, cx| {
+                this.connections_status = brokers;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Whether the engine reports a connection with `status == "connected"`
+    /// whose id matches `predicate`. The single source of truth for a
+    /// connection toggle's ON state — it never returns `true` from local
+    /// optimism, only from a real engine status.
+    fn connection_is_connected(&self, predicate: impl Fn(&str) -> bool) -> bool {
+        self.connections_status
+            .iter()
+            .any(|broker| broker.status.state == "connected" && predicate(&broker.id))
+    }
+
+    /// Build the broker-connect entity (credential editors that must keep focus
+    /// across renders) if it does not exist yet. Extracted from `push_sub_page`
+    /// so the inline-expand handler can build the same entity without touching
+    /// the sub-page stack.
+    fn ensure_broker_connect_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.broker_connect_page.is_some() {
+            return;
+        }
+        let page = cx.new(|cx| auracle_connections::BrokerWizard::new(window, cx));
+        // A successful connection bumps `ConnectGeneration` (handled by the
+        // entity) and dismisses; refresh the toggle state and collapse the row.
+        self.broker_connect_subscription = Some(cx.subscribe_in(
+            &page,
+            window,
+            |settings_window, _page, _event: &gpui::DismissEvent, _window, cx| {
+                settings_window.expanded_connection = None;
+                settings_window.load_connections_status(cx);
+                cx.notify();
+            },
+        ));
+        self.broker_connect_page = Some(page);
+    }
+
+    /// Build the QuantConnect-connect entity if it does not exist yet. Extracted
+    /// from `push_sub_page` for the same reason as `ensure_broker_connect_page`.
+    fn ensure_quantconnect_connect_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quantconnect_connect_page.is_some() {
+            return;
+        }
+        let page = cx.new(|cx| auracle_connections::QuantConnectConnect::new(window, cx));
+        self.quantconnect_connect_subscription = Some(cx.subscribe_in(
+            &page,
+            window,
+            |settings_window, _page, _event: &gpui::DismissEvent, _window, cx| {
+                settings_window.expanded_connection = None;
+                settings_window.load_connections_status(cx);
+                cx.notify();
+            },
+        ));
+        self.quantconnect_connect_page = Some(page);
+    }
+
+    /// Toggle the inline accordion for `key`, building the form entity for
+    /// broker/QuantConnect rows on expand. Accordion: opening one collapses any
+    /// other. Crucially this never touches `sub_page_stack`, so the navbar-focus
+    /// subscription that used to wipe a just-pushed form can't fire.
+    fn toggle_connection_expanded(
+        &mut self,
+        kind: ConnectionKind,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.expanded_connection == Some(key) {
+            self.expanded_connection = None;
+        } else {
+            self.expanded_connection = Some(key);
+            match kind {
+                ConnectionKind::Broker => self.ensure_broker_connect_page(window, cx),
+                ConnectionKind::QuantConnect => self.ensure_quantconnect_connect_page(window, cx),
+                ConnectionKind::Account | ConnectionKind::Data => {}
+            }
+        }
+        cx.notify();
+    }
+
+    /// Toggle-OFF path: clear the connection's stored credentials in the engine
+    /// vault, then refetch status so the toggle reflects the new (disconnected)
+    /// state. Broker disconnects every currently-connected non-QuantConnect
+    /// broker; QuantConnect clears its own token. Account/Data have no
+    /// disconnect (their toggles are disabled), so this is a no-op for them.
+    fn disconnect_connection(&mut self, kind: ConnectionKind, cx: &mut Context<Self>) {
+        let http = cx.http_client();
+        match kind {
+            ConnectionKind::Broker => {
+                let connected: Vec<String> = self
+                    .connections_status
+                    .iter()
+                    .filter(|broker| {
+                        broker.status.state == "connected" && broker.id != "quantconnect"
+                    })
+                    .map(|broker| broker.id.clone())
+                    .collect();
+                if connected.is_empty() {
+                    return;
+                }
+                cx.spawn(async move |this, cx| {
+                    for broker in &connected {
+                        auracle_connections::disconnect_connection(http.clone(), broker)
+                            .await
+                            .log_err();
+                    }
+                    this.update(cx, |this, cx| this.load_connections_status(cx))
+                        .ok();
+                })
+                .detach();
+            }
+            ConnectionKind::QuantConnect => {
+                cx.spawn(async move |this, cx| {
+                    auracle_connections::clear_quantconnect_credentials(http)
+                        .await
+                        .log_err();
+                    this.update(cx, |this, cx| this.load_connections_status(cx))
+                        .ok();
+                })
+                .detach();
+            }
+            ConnectionKind::Account | ConnectionKind::Data => {}
+        }
     }
 
     fn handle_project_event(
@@ -2231,6 +2649,12 @@ impl SettingsWindow {
                         } else {
                             any_found_since_last_header = true;
                         }
+                    }
+                    // Connection rows are user-global surfaces (account, broker,
+                    // data, QuantConnect): always reachable in every scope, so
+                    // they are never masked out by the current project file.
+                    SettingsPageItem::ConnectionRow(_) => {
+                        any_found_since_last_header = true;
                     }
                 }
             }
@@ -2478,6 +2902,31 @@ impl SettingsWindow {
                             &mut fuzzy_match_candidates,
                             key_index,
                             action_link.title.as_ref(),
+                        );
+                    }
+                    // Index a connection row on its title + description (like a
+                    // sub-page link) and register its deep-link path, so search
+                    // and `#`-prefixed json-path lookups both find it.
+                    SettingsPageItem::ConnectionRow(connection_row) => {
+                        json_path = connection_row.json_path;
+                        documents.push(SearchDocument {
+                            id: key_index,
+                            words: split_into_words(&[
+                                page.title,
+                                header_str,
+                                connection_row.title.as_ref(),
+                                connection_row.description.as_ref(),
+                            ]),
+                        });
+                        push_candidates(
+                            &mut fuzzy_match_candidates,
+                            key_index,
+                            connection_row.title.as_ref(),
+                        );
+                        push_candidates(
+                            &mut fuzzy_match_candidates,
+                            key_index,
+                            connection_row.description.as_ref(),
                         );
                     }
                 }
@@ -4265,38 +4714,16 @@ impl SettingsWindow {
             let weak = cx.weak_entity();
             self.ai_providers_page = Some(pages::build_ai_providers_page(weak, window, cx));
         }
-        // Build the "Connect a broker" entity here (where `Window` + `&mut self`
-        // are available) for the same reason as the AI providers page: it holds
-        // credential editors whose focus must survive re-renders. Subscribe to
-        // its `DismissEvent` so a successful connection pops the sub-page back to
-        // the Connections list, mirroring the old modal's auto-close.
-        if sub_page_link.r#type == SubPageType::BrokerConnect && self.broker_connect_page.is_none()
-        {
-            let page = cx.new(|cx| auracle_connections::BrokerWizard::new(window, cx));
-            self.broker_connect_subscription = Some(cx.subscribe_in(
-                &page,
-                window,
-                |settings_window, _page, _event: &gpui::DismissEvent, window, cx| {
-                    settings_window.pop_sub_page(window, cx);
-                },
-            ));
-            self.broker_connect_page = Some(page);
+        // Connections no longer push sub-pages (they expand inline on the
+        // Connections page), but `push_sub_page` is still reachable for any
+        // legacy `SubPageType::BrokerConnect`/`QuantConnectConnect` link, so
+        // keep the entity-build path working by deferring to the shared
+        // `ensure_*` helpers the inline handler also uses.
+        if sub_page_link.r#type == SubPageType::BrokerConnect {
+            self.ensure_broker_connect_page(window, cx);
         }
-        // Build the "Connect QuantConnect" entity here for the same reason as the
-        // broker page — its credential editors must keep focus across renders —
-        // and pop the sub-page once the credentials save.
-        if sub_page_link.r#type == SubPageType::QuantConnectConnect
-            && self.quantconnect_connect_page.is_none()
-        {
-            let page = cx.new(|cx| auracle_connections::QuantConnectConnect::new(window, cx));
-            self.quantconnect_connect_subscription = Some(cx.subscribe_in(
-                &page,
-                window,
-                |settings_window, _page, _event: &gpui::DismissEvent, window, cx| {
-                    settings_window.pop_sub_page(window, cx);
-                },
-            ));
-            self.quantconnect_connect_page = Some(page);
+        if sub_page_link.r#type == SubPageType::QuantConnectConnect {
+            self.ensure_quantconnect_connect_page(window, cx);
         }
         // Resolve the "Agent rules" sub-page state when it is pushed. The prompt
         // store loads asynchronously and `AGENTS.md` existence is an async `fs`
@@ -4525,35 +4952,58 @@ impl SettingsWindow {
     ) -> bool {
         self.sub_page_stack.clear();
 
-        for (page_index, page) in self.pages.iter().enumerate() {
+        // Locate the target by json_path first (immutable borrow of `self.pages`),
+        // recording where to scroll and — for a connection row — which row to
+        // expand inline. Acting happens after the borrow ends so the `&mut self`
+        // navbar/expand calls don't conflict with the page iteration.
+        let mut target: Option<(usize, usize)> = None;
+        let mut connection_to_expand: Option<(ConnectionKind, &'static str)> = None;
+        'pages: for (page_index, page) in self.pages.iter().enumerate() {
             for (item_index, item) in page.items.iter().enumerate() {
-                let item_json_path = match item {
-                    SettingsPageItem::SettingItem(setting_item) => setting_item.field.json_path(),
-                    SettingsPageItem::DynamicItem(dynamic_item) => {
-                        dynamic_item.discriminant.field.json_path()
+                let (item_json_path, connection) = match item {
+                    SettingsPageItem::SettingItem(setting_item) => {
+                        (setting_item.field.json_path(), None)
                     }
-                    _ => None,
+                    SettingsPageItem::DynamicItem(dynamic_item) => {
+                        (dynamic_item.discriminant.field.json_path(), None)
+                    }
+                    SettingsPageItem::ConnectionRow(connection_row) => (
+                        connection_row.json_path,
+                        Some((connection_row.kind, connection_row.key)),
+                    ),
+                    _ => (None, None),
                 };
                 if item_json_path == Some(json_path) {
-                    if let Some(navbar_entry_index) = self
-                        .navbar_entries
-                        .iter()
-                        .position(|e| e.page_index == page_index && e.is_root)
-                    {
-                        self.open_and_scroll_to_navbar_entry(
-                            navbar_entry_index,
-                            None,
-                            false,
-                            window,
-                            cx,
-                        );
-                        self.scroll_to_content_item(item_index, window, cx);
-                        return true;
-                    }
+                    target = Some((page_index, item_index));
+                    connection_to_expand = connection;
+                    break 'pages;
                 }
             }
         }
-        false
+
+        let Some((page_index, item_index)) = target else {
+            return false;
+        };
+        let Some(navbar_entry_index) = self
+            .navbar_entries
+            .iter()
+            .position(|e| e.page_index == page_index && e.is_root)
+        else {
+            return false;
+        };
+        self.open_and_scroll_to_navbar_entry(navbar_entry_index, None, false, window, cx);
+        // Deep-linking to a connection lands on it expanded (e.g. the deploy
+        // gate opening broker-connect), building its form entity if needed.
+        if let Some((kind, key)) = connection_to_expand {
+            self.expanded_connection = Some(key);
+            match kind {
+                ConnectionKind::Broker => self.ensure_broker_connect_page(window, cx),
+                ConnectionKind::QuantConnect => self.ensure_quantconnect_connect_page(window, cx),
+                ConnectionKind::Account | ConnectionKind::Data => {}
+            }
+        }
+        self.scroll_to_content_item(item_index, window, cx);
+        true
     }
 
     fn pop_sub_page(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
@@ -5404,6 +5854,10 @@ pub mod test {
                 quantconnect_connect_page: None,
                 quantconnect_connect_subscription: None,
                 agent_rules: None,
+                expanded_connection: None,
+                connections_status: Vec::new(),
+                connections_status_task: None,
+                connection_content_scroll_handle: ScrollHandle::new(),
             }
         }
     }
@@ -5543,6 +5997,10 @@ pub mod test {
             quantconnect_connect_page: None,
             quantconnect_connect_subscription: None,
             agent_rules: None,
+            expanded_connection: None,
+            connections_status: Vec::new(),
+            connections_status_task: None,
+            connection_content_scroll_handle: ScrollHandle::new(),
         };
 
         settings_window.build_filter_table();
@@ -6426,7 +6884,7 @@ pub mod test {
     }
 
     #[gpui::test]
-    async fn test_connections_nav_entries_open_their_sub_pages(cx: &mut gpui::TestAppContext) {
+    async fn test_connections_expand_inline_not_as_sub_pages(cx: &mut gpui::TestAppContext) {
         use project::Project;
 
         cx.update(|cx| {
@@ -6493,36 +6951,27 @@ pub mod test {
         }
 
         settings_window.update_in(cx, |settings_window, window, cx| {
-            // Every Connections section is a pure gateway, so its nav entry resolves
-            // to the connection's sub-page link.
-            for (section, link_title) in [
-                ("Account", "Account"),
-                ("Broker connections", "Connect a broker"),
-                ("Data sources", "Data sources"),
-                ("QuantConnect", "Connect QuantConnect"),
+            // Connections are now inline-expand rows, not sub-page gateways: their
+            // nav entries must NOT resolve to a gateway sub-page (the gateway path
+            // was what bounced focus to the navbar and wiped the pushed form).
+            for section in [
+                "Account",
+                "Broker connections",
+                "Data sources",
+                "QuantConnect",
             ] {
                 let idx = nav_entry_index(settings_window, section)
                     .unwrap_or_else(|| panic!("`{section}` nav entry should exist"));
-                let resolved = settings_window
-                    .gateway_sub_page_for_nav_entry(idx)
-                    .unwrap_or_else(|| panic!("`{section}` should be a gateway"));
-                assert_eq!(resolved.0.title, link_title);
-            }
-
-            // A section that holds real settings is NOT a gateway and keeps the
-            // default scroll-to-section behaviour.
-            if let Some(privacy_idx) = nav_entry_index(settings_window, "Privacy") {
                 assert!(
                     settings_window
-                        .gateway_sub_page_for_nav_entry(privacy_idx)
+                        .gateway_sub_page_for_nav_entry(idx)
                         .is_none(),
-                    "a settings section must not be treated as a gateway"
+                    "`{section}` must no longer be a sub-page gateway"
                 );
             }
 
-            // Activating the "Data sources" entry opens its sub-page directly — the
-            // routing the bug report said was missing. (Data sources is used here
-            // because its sub-page builds no network-fetching entity.)
+            // Activating a connection nav entry scrolls to its section in place —
+            // it must NOT push a sub-page.
             let data_idx = nav_entry_index(settings_window, "Data sources")
                 .expect("`Data sources` nav entry should exist");
             settings_window.activate_navbar_entry(data_idx, window, cx);
@@ -6531,32 +6980,24 @@ pub mod test {
         cx.run_until_parked();
 
         settings_window.update_in(cx, |settings_window, window, cx| {
-            assert_eq!(
-                settings_window
-                    .sub_page_stack
-                    .last()
-                    .map(|sub_page| sub_page.link.title.to_string()),
-                Some("Data sources".to_string()),
-                "clicking the Data sources nav entry should open its sub-page"
+            assert!(
+                settings_window.sub_page_stack.is_empty(),
+                "activating a connection nav entry must not push a sub-page"
             );
 
-            // The nav entry's focus subscription re-fires when focus returns to the
-            // rail; the open gateway page must survive that, not be torn down.
-            let data_idx = nav_entry_index(settings_window, "Data sources")
-                .expect("`Data sources` nav entry should exist");
-            settings_window.open_and_scroll_to_navbar_entry(data_idx, None, false, window, cx);
-
+            // Deep-linking to a connection by its json_path lands on it expanded,
+            // in place, with no sub-page pushed. (Account builds no
+            // network-fetching credential entity, so it is the safe row here.)
+            let found = settings_window.navigate_to_setting("connections.account", window, cx);
+            assert!(found, "the account connection deep-link must resolve");
             assert_eq!(
-                settings_window.sub_page_stack.len(),
-                1,
-                "re-focusing the nav entry must preserve the open sub-page"
+                settings_window.expanded_connection,
+                Some("connections.account"),
+                "deep-linking a connection must expand it inline"
             );
-            assert_eq!(
-                settings_window
-                    .sub_page_stack
-                    .last()
-                    .map(|sub_page| sub_page.link.title.to_string()),
-                Some("Data sources".to_string()),
+            assert!(
+                settings_window.sub_page_stack.is_empty(),
+                "expanding a connection inline must not push a sub-page"
             );
         });
     }

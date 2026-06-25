@@ -81,8 +81,26 @@ pub struct BrokerSummary {
     pub display_label: String,
     #[serde(default)]
     pub blurb: String,
+    // The engine returns `status` as a NESTED object (ConnectionStatus.to_dict),
+    // not a flat string: `{"state": "connected"|..., "detail": ..., "paper_mode": ...}`.
+    // Modeling it as a struct keeps `serde_json::from_value` from failing on every
+    // broker (which silently dropped them all in `list_brokers`).
     #[serde(default)]
-    pub status: String,
+    pub status: ConnStatus,
+}
+
+/// The nested `status` object the engine emits for each broker, mirroring
+/// `ConnectionStatus.to_dict()` (auracle/brokers/base.py). Only the fields the
+/// IDE consumes are modeled; the rest of the payload is ignored. The connected
+/// sentinel is the inner `state == "connected"`.
+#[derive(Clone, Deserialize, Default)]
+pub struct ConnStatus {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub paper_mode: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -445,6 +463,35 @@ fn base_url(config: &AuracleConfig) -> String {
         .unwrap_or_else(|| "http://127.0.0.1:1969".into())
 }
 
+/// Build the failure message for a non-success engine response. The engine is
+/// FastAPI, whose errors carry a user-actionable reason in a `{"detail": ...}`
+/// body (e.g. a 404 "no DeepSeek key configured — set it in the launcher" or a
+/// 409 VaultFailClosed message). We surface that detail so callers can show the
+/// engine's own words instead of a generic "couldn't reach the engine"; when no
+/// parseable detail is present we fall back to the bare status.
+fn engine_error_message(status: http_client::StatusCode, body: &str) -> String {
+    match engine_detail(body) {
+        Some(detail) => format!("engine answered with status {status}: {detail}"),
+        None => format!("engine answered with status {status}"),
+    }
+}
+
+/// Pull FastAPI's `detail` out of an error body. A string detail is surfaced
+/// verbatim; a structured detail (422 validation errors arrive as a list) is
+/// rendered compactly rather than dropped. Returns `None` when the body isn't
+/// JSON or carries no usable detail, so the caller falls back to the status.
+fn engine_detail(body: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    match value.get("detail")? {
+        serde_json::Value::String(detail) => {
+            let detail = detail.trim();
+            (!detail.is_empty()).then(|| detail.to_string())
+        }
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
 /// Authenticated GET against a `/ui/api` route, returning parsed JSON. Made
 /// `pub` so sibling surfaces (the native settings panel) can read engine
 /// truths through the same loopback transport.
@@ -461,7 +508,16 @@ pub async fn get_json(
         .body(http_client::AsyncBody::default())?;
     let mut response = http.send(request).await?;
     if !response.status().is_success() {
-        anyhow::bail!("engine answered with status {}", response.status());
+        let status = response.status();
+        let mut body = String::new();
+        // Best-effort read of the engine's error body so its `detail` reaches
+        // the caller; a read failure still leaves the status to report.
+        match response.body_mut().read_to_string(&mut body).await {
+            Ok(_) => anyhow::bail!("{}", engine_error_message(status, &body)),
+            Err(error) => {
+                anyhow::bail!("engine answered with status {status} (could not read body: {error})")
+            }
+        }
     }
     let mut text = String::new();
     response.body_mut().read_to_string(&mut text).await?;
@@ -575,7 +631,16 @@ pub async fn send_json(
         .body(http_client::AsyncBody::from(payload))?;
     let mut response = http.send(request).await?;
     if !response.status().is_success() {
-        anyhow::bail!("engine answered with status {}", response.status());
+        let status = response.status();
+        let mut body = String::new();
+        // Best-effort read of the engine's error body so its `detail` reaches
+        // the caller; a read failure still leaves the status to report.
+        match response.body_mut().read_to_string(&mut body).await {
+            Ok(_) => anyhow::bail!("{}", engine_error_message(status, &body)),
+            Err(error) => {
+                anyhow::bail!("engine answered with status {status} (could not read body: {error})")
+            }
+        }
     }
     let mut text = String::new();
     response.body_mut().read_to_string(&mut text).await?;
@@ -615,6 +680,22 @@ pub async fn save_connection(
     body: serde_json::Value,
 ) -> Result<()> {
     post_json(http, &format!("/ui/api/connections/{broker}/save"), body).await?;
+    Ok(())
+}
+
+/// Disconnect a broker by clearing its stored credentials (the toggle-OFF path on
+/// the inline Connections rows). The engine clears the vault entry and the broker
+/// then reports back as not connected on the next `list_brokers` poll.
+pub async fn disconnect_connection(
+    http: Arc<dyn http_client::HttpClient>,
+    broker: &str,
+) -> Result<()> {
+    post_json(
+        http,
+        &format!("/ui/api/connections/{broker}/disconnect"),
+        serde_json::Value::Null,
+    )
+    .await?;
     Ok(())
 }
 
@@ -797,7 +878,7 @@ impl BrokerWizard {
             } else {
                 broker.display_label.clone()
             };
-            let connected = broker.status == "connected";
+            let connected = broker.status.state == "connected";
             list = list.child(
                 Button::new(SharedString::from(broker.id.clone()), title)
                     .style(if connected {
@@ -1236,9 +1317,10 @@ impl Render for QuantConnectConnect {
 #[cfg(test)]
 mod tests {
     use super::{
-        FieldMeta, Step, build_connection_body, default_selections, engine_provider_to_ide,
-        ide_provider_to_engine,
+        BrokerSummary, FieldMeta, Step, build_connection_body, default_selections, engine_detail,
+        engine_error_message, engine_provider_to_ide, ide_provider_to_engine,
     };
+    use http_client::StatusCode;
     use std::collections::HashMap;
 
     fn text_field(name: &str) -> FieldMeta {
@@ -1394,5 +1476,101 @@ mod tests {
             let engine = ide_provider_to_engine(ide);
             assert_eq!(engine_provider_to_ide(engine), Some(ide));
         }
+    }
+
+    #[test]
+    fn engine_error_surfaces_fastapi_string_detail() {
+        // The load-bearing case: a 404 whose body carries the engine's own
+        // user-actionable reason must reach the caller, not be flattened to the
+        // bare status — otherwise the chat falls back to "couldn't reach your
+        // engine" even though the engine answered precisely.
+        let body = r#"{"detail":"no DeepSeek key configured — set it in the launcher"}"#;
+        assert_eq!(
+            engine_error_message(StatusCode::NOT_FOUND, body),
+            "engine answered with status 404 Not Found: \
+             no DeepSeek key configured — set it in the launcher"
+        );
+        assert_eq!(
+            engine_detail(body).as_deref(),
+            Some("no DeepSeek key configured — set it in the launcher")
+        );
+    }
+
+    #[test]
+    fn engine_error_renders_structured_detail_compactly() {
+        // FastAPI's 422 validation errors arrive as a list under `detail`; we
+        // render it compactly rather than drop it, so the reason still reaches
+        // the caller.
+        let body = r#"{"detail":[{"loc":["body","mode"],"msg":"field required"}]}"#;
+        assert_eq!(
+            engine_detail(body).as_deref(),
+            Some(r#"[{"loc":["body","mode"],"msg":"field required"}]"#)
+        );
+        assert_eq!(
+            engine_error_message(StatusCode::UNPROCESSABLE_ENTITY, body),
+            r#"engine answered with status 422 Unprocessable Entity: [{"loc":["body","mode"],"msg":"field required"}]"#
+        );
+    }
+
+    #[test]
+    fn engine_error_falls_back_to_status_without_usable_detail() {
+        // Non-JSON, JSON without `detail`, an empty/whitespace detail, and a
+        // null detail all carry nothing actionable — the message stays the
+        // bare status it was before this fix, so behavior never regresses.
+        for body in [
+            "",
+            "<html>502 Bad Gateway</html>",
+            r#"{"error":"boom"}"#,
+            r#"{"detail":""}"#,
+            r#"{"detail":"   "}"#,
+            r#"{"detail":null}"#,
+        ] {
+            assert_eq!(
+                engine_detail(body),
+                None,
+                "body should yield no detail: {body:?}"
+            );
+            assert_eq!(
+                engine_error_message(StatusCode::BAD_GATEWAY, body),
+                "engine answered with status 502 Bad Gateway",
+                "body should fall back to status: {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn broker_summary_deserializes_nested_status_object() {
+        // Pins the live GET /ui/api/connections contract: each broker's `status`
+        // is the NESTED ConnectionStatus.to_dict() object, not a flat string.
+        // Modeling it as a string made serde fail and silently drop every broker
+        // (Loading brokers… forever, toggles stuck OFF, disconnect a no-op).
+        let payload = serde_json::json!({
+            "connections": [{
+                "id": "ibkr",
+                "display_label": "Interactive Brokers",
+                "blurb": "Route orders + market data",
+                "status": {
+                    "state": "connected",
+                    "detail": "gateway up",
+                    "last_activity_at": null,
+                    "paper_mode": true,
+                    "account_id": "DU123",
+                    "latency_ms": 12,
+                    "checked_at": "2026-06-24T00:00:00+00:00"
+                }
+            }]
+        });
+        let list = payload["connections"].as_array().unwrap().clone();
+        let brokers: Vec<BrokerSummary> = list
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect();
+
+        assert_eq!(brokers.len(), 1, "the broker must not be silently dropped");
+        let ibkr = &brokers[0];
+        assert_eq!(ibkr.id, "ibkr");
+        assert_eq!(ibkr.status.state, "connected");
+        assert_eq!(ibkr.status.detail.as_deref(), Some("gateway up"));
+        assert_eq!(ibkr.status.paper_mode, Some(true));
     }
 }
