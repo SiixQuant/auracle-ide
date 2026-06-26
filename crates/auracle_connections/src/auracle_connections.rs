@@ -310,20 +310,18 @@ impl BrokerWizard {
         cx.notify();
         self._task = Some(cx.spawn(async move |this, cx| {
             let result = save_connection(http, &broker, body).await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        let generation = cx.global::<ConnectGeneration>().0 + 1;
-                        cx.set_global(ConnectGeneration(generation));
-                        cx.emit(DismissEvent);
-                    }
-                    Err(error) => {
-                        this.state = TestState::Verdict {
-                            ok: false,
-                            plain: SharedString::from(format!("Couldn't save: {error}.")),
-                        };
-                        cx.notify();
-                    }
+            this.update(cx, |this, cx| match result {
+                Ok(()) => {
+                    let generation = cx.global::<ConnectGeneration>().0 + 1;
+                    cx.set_global(ConnectGeneration(generation));
+                    cx.emit(DismissEvent);
+                }
+                Err(error) => {
+                    this.state = TestState::Verdict {
+                        ok: false,
+                        plain: SharedString::from(format!("Couldn't save: {error}.")),
+                    };
+                    cx.notify();
                 }
             })
             .ok();
@@ -467,7 +465,10 @@ pub async fn send_json(
         .header("Content-Type", "application/json")
         .header("X-API-Key", key.clone())
         .header("X-CSRF-Token", csrf.clone())
-        .header("Cookie", format!("auracle_session={key}; auracle_csrf={csrf}"))
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
         .body(http_client::AsyncBody::from(payload))?;
     let mut response = http.send(request).await?;
     if !response.status().is_success() {
@@ -581,8 +582,97 @@ impl Focusable for BrokerWizard {
 
 impl ModalView for BrokerWizard {}
 
+/// The bundled official logo for a connection, rendered full-colour via `img`
+/// (gpui rasterises SVG). Returns the asset path when we ship a logo for this
+/// broker; unknown brokers fall back to a brand-colour monogram tile. To add
+/// one: drop `assets/icons/brokers/<file>.svg` and map the id here.
+fn broker_logo_path(id: &str) -> Option<&'static str> {
+    match id {
+        "ibkr" | "ibkr_cp" => Some("icons/brokers/interactive-brokers.svg"),
+        "alpaca" => Some("icons/brokers/alpaca.svg"),
+        "quantconnect" => Some("icons/brokers/quantconnect.svg"),
+        _ => None,
+    }
+}
+
+/// Brand colour for the monogram-tile fallback (brokers without a bundled logo).
+fn brand_rgb(id: &str) -> gpui::Rgba {
+    match id {
+        "clearstreet" => gpui::rgb(0x1466FF),
+        "hyperliquid" => gpui::rgb(0x0E9C84),
+        "polygon" => gpui::rgb(0x5B3DF5),
+        _ => gpui::rgb(0x6B7280),
+    }
+}
+
+/// A short, stable monogram for the fallback tile: a curated mark for known
+/// brokers, else the first two alphanumeric characters of the display label.
+fn brand_monogram(id: &str, label: &str) -> SharedString {
+    let curated = match id {
+        "clearstreet" => Some("CS"),
+        "hyperliquid" => Some("HL"),
+        "polygon" => Some("PG"),
+        _ => None,
+    };
+    if let Some(mark) = curated {
+        return mark.into();
+    }
+    let source = if label.is_empty() { id } else { label };
+    let mono: String = source
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .take(2)
+        .collect();
+    if mono.is_empty() {
+        "?".into()
+    } else {
+        mono.to_uppercase().into()
+    }
+}
+
+/// A fixed-height connection mark: the official logo on a clean light chip (so
+/// brand colours read in any theme) when we ship one, otherwise a brand-colour
+/// monogram tile. Sized so every row reads as a deliberate, consistent mark.
+fn brand_tile(id: &str, label: &str) -> AnyElement {
+    if let Some(path) = broker_logo_path(id) {
+        return div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .h_8()
+            .px_2()
+            .rounded_md()
+            .bg(gpui::white())
+            .child(gpui::img(path).h_5())
+            .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size_8()
+        .rounded_md()
+        .bg(brand_rgb(id))
+        .child(
+            Label::new(brand_monogram(id, label))
+                .size(LabelSize::Small)
+                .color(Color::Custom(gpui::white())),
+        )
+        .into_any_element()
+}
+
 impl BrokerWizard {
     fn render_choose(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Theme colours copied into Copy locals so the per-row closures don't
+        // hold a borrow of `cx` across `cx.listener`.
+        let border = cx.theme().colors().border;
+        let border_focused = cx.theme().colors().border_focused;
+        let row_bg = cx.theme().colors().ghost_element_background;
+        let row_selected = cx.theme().colors().element_selected;
+        let row_hover = cx.theme().colors().element_hover;
+
         let mut list = v_flex().gap_2();
         if self.brokers.is_empty() {
             list = list.child(
@@ -599,17 +689,48 @@ impl BrokerWizard {
                 broker.display_label.clone()
             };
             let connected = broker.status == "connected";
+            let blurb = broker.blurb.clone();
+            let has_logo = broker_logo_path(&broker.id).is_some();
             list = list.child(
-                Button::new(SharedString::from(broker.id.clone()), title)
-                    .style(if connected {
-                        ButtonStyle::Filled
-                    } else {
-                        ButtonStyle::Outlined
-                    })
-                    .full_width()
+                div()
+                    .id(SharedString::from(broker.id.clone()))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if connected { border_focused } else { border })
+                    .bg(if connected { row_selected } else { row_bg })
+                    .hover(move |style| style.bg(row_hover))
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_broker(id.clone(), cx);
-                    })),
+                    }))
+                    .child(brand_tile(&broker.id, &title))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            // A wordmark logo already names the broker, so only
+                            // show the text name when we're rendering a tile.
+                            .when(!has_logo, |column| column.child(Label::new(title.clone())))
+                            .when(!blurb.is_empty(), |column| {
+                                column.child(
+                                    Label::new(blurb.clone())
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                )
+                            }),
+                    )
+                    .when(connected, |row| {
+                        row.child(
+                            Label::new("Connected")
+                                .size(LabelSize::Small)
+                                .color(Color::Success),
+                        )
+                    }),
             );
         }
         v_flex()
@@ -642,7 +763,11 @@ impl BrokerWizard {
             // control so the value is always a valid option — never a typo
             // in a free-text box. Other kinds use the text/password editor.
             let input = if field.kind == "select" {
-                let selected = self.selections.get(&field.name).cloned().unwrap_or_default();
+                let selected = self
+                    .selections
+                    .get(&field.name)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut segmented = h_flex().gap_1();
                 for option in field.options.clone() {
                     let field_name = field.name.clone();
@@ -666,7 +791,19 @@ impl BrokerWizard {
                 }
                 segmented.into_any_element()
             } else if i < self.editors.len() {
-                self.editors[i].clone().into_any_element()
+                // Box the editor like the IDE's other credential inputs: a
+                // rounded, bordered field on the editor surface instead of bare
+                // text floating on the page.
+                div()
+                    .w_full()
+                    .py_1()
+                    .px_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().editor_background)
+                    .child(self.editors[i].clone())
+                    .into_any_element()
             } else {
                 Label::new("Set this field from the web console for now.")
                     .size(LabelSize::Small)
@@ -676,11 +813,7 @@ impl BrokerWizard {
             form = form.child(
                 v_flex()
                     .gap_1()
-                    .child(
-                        Label::new(label)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
+                    .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                     .child(input),
             );
         }
@@ -688,7 +821,9 @@ impl BrokerWizard {
     }
 
     fn render_confirm(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().gap_2().child(Label::new("What this broker can do"));
+        let mut body = v_flex()
+            .gap_2()
+            .child(Label::new("What this broker can do"));
         match &self.capability {
             None => {
                 body = body.child(
@@ -713,7 +848,11 @@ impl BrokerWizard {
             Some(cap) => {
                 let mut chips = h_flex().gap_2();
                 for leg in ["data", "paper", "live"] {
-                    let state = cap.capabilities.get(leg).map(String::as_str).unwrap_or("unknown");
+                    let state = cap
+                        .capabilities
+                        .get(leg)
+                        .map(String::as_str)
+                        .unwrap_or("unknown");
                     let (text, color) = match state {
                         "yes" => (format!("{leg}: yes"), Color::Success),
                         "no" => (format!("{leg}: no"), Color::Muted),
