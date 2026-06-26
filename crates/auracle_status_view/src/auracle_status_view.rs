@@ -30,8 +30,13 @@ pub enum EngineFacts {
     NotConnected,
     /// Key present, first poll in flight.
     Checking,
-    /// Fetch failed.
+    /// Fetch failed (no answer / network error) — the engine may be stopped.
     Unreachable,
+    /// The engine answered but rejected the api key (401/403): reachable, but
+    /// the key is expired or from a different install. Distinct from
+    /// `Unreachable` so the chip doesn't blame the engine being down for what
+    /// is really a credential problem.
+    InvalidCredentials,
     Connected {
         /// None => no broker active yet.
         broker: Option<String>,
@@ -81,6 +86,14 @@ pub fn chip_view(facts: EngineFacts) -> ChipView {
             tone: ChipTone::Bad,
             tooltip: "Your engine didn't answer. It may be stopped — start it, \
                       or click to check the connection details."
+                .to_string(),
+        },
+        EngineFacts::InvalidCredentials => ChipView {
+            label: "engine: key rejected".to_string(),
+            tone: ChipTone::Bad,
+            tooltip: "Your engine answered but rejected the API key — it may be \
+                      expired or from a different install. Click to reconnect \
+                      with a fresh key."
                 .to_string(),
         },
         EngineFacts::Connected {
@@ -289,6 +302,18 @@ mod tests {
         let view = chip_view(EngineFacts::Unreachable);
         assert_eq!(view.label, "engine: unreachable");
         assert_eq!(view.tone, ChipTone::Bad);
+    }
+
+    #[test]
+    fn invalid_credentials_is_distinct_from_unreachable() {
+        // A rejected key is reachable-but-unauthorized; the chip must say so
+        // (re-auth), never blame the engine being down.
+        let view = chip_view(EngineFacts::InvalidCredentials);
+        assert_eq!(view.label, "engine: key rejected");
+        assert_eq!(view.tone, ChipTone::Bad);
+        assert_ne!(view.label, chip_view(EngineFacts::Unreachable).label);
+        assert!(view.tooltip.contains("rejected the API key"));
+        assert!(!view.tooltip.contains("didn't answer"));
     }
 
     #[test]

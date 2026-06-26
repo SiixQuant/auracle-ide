@@ -103,6 +103,13 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineFacts {
             .header("Cookie", format!("auracle_session={key}"))
             .body(http_client::AsyncBody::default())?;
         let mut response = http.send(request).await?;
+        let code = response.status().as_u16();
+        if code == 401 || code == 403 {
+            // The engine answered — it's reachable; it rejected the api key.
+            // Surface that honestly instead of conflating it with Unreachable:
+            // "key rejected" tells the user to re-auth, not to restart.
+            return Ok(EngineFacts::InvalidCredentials);
+        }
         if !response.status().is_success() {
             anyhow::bail!("status {}", response.status());
         }
