@@ -636,83 +636,10 @@ impl Focusable for BrokerWizard {
     }
 }
 
-<<<<<<< Updated upstream
 impl ModalView for BrokerWizard {}
-=======
-/// Brand colour for a connection's monogram tile. Unknown ids fall back to a
-/// neutral slate. Official SVG logos can be dropped in to replace these tiles
-/// later; a fitted brand monogram reads as intentional rather than a
-/// poorly-scaled bitmap.
-fn brand_rgb(id: &str) -> gpui::Rgba {
-    match id {
-        "ibkr" | "ibkr_cp" => gpui::rgb(0xD4122A),
-        "alpaca" => gpui::rgb(0xB8860B),
-        "clearstreet" => gpui::rgb(0x1466FF),
-        "hyperliquid" => gpui::rgb(0x0E9C84),
-        "quantconnect" => gpui::rgb(0xF26B21),
-        "polygon" => gpui::rgb(0x5B3DF5),
-        _ => gpui::rgb(0x6B7280),
-    }
-}
-
-/// A short, stable monogram for the tile: a curated mark for known brokers,
-/// else the first two alphanumeric characters of the display label.
-fn brand_monogram(id: &str, label: &str) -> SharedString {
-    let curated = match id {
-        "ibkr" | "ibkr_cp" => Some("IB"),
-        "alpaca" => Some("AL"),
-        "clearstreet" => Some("CS"),
-        "hyperliquid" => Some("HL"),
-        "quantconnect" => Some("QC"),
-        "polygon" => Some("PG"),
-        _ => None,
-    };
-    if let Some(mark) = curated {
-        return mark.into();
-    }
-    let source = if label.is_empty() { id } else { label };
-    let mono: String = source
-        .chars()
-        .filter(|character| character.is_alphanumeric())
-        .take(2)
-        .collect();
-    if mono.is_empty() {
-        "?".into()
-    } else {
-        mono.to_uppercase().into()
-    }
-}
-
-/// A fixed-size rounded brand tile (monogram on the brand colour). Sized and
-/// fitted so every connection in the list reads as a deliberate, consistent
-/// mark instead of a row of bare text.
-fn brand_tile(id: &str, label: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size_8()
-        .rounded_md()
-        .bg(brand_rgb(id))
-        .child(
-            Label::new(brand_monogram(id, label))
-                .size(LabelSize::Small)
-                .color(Color::Custom(gpui::white())),
-        )
-}
->>>>>>> Stashed changes
 
 impl BrokerWizard {
     fn render_choose(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the few theme colours we need into Copy locals up front so the
-        // per-row closures don't hold a borrow of `cx` across `cx.listener`.
-        let border = cx.theme().colors().border;
-        let border_focused = cx.theme().colors().border_focused;
-        let row_bg = cx.theme().colors().ghost_element_background;
-        let row_selected = cx.theme().colors().element_selected;
-        let row_hover = cx.theme().colors().element_hover;
-
         let mut list = v_flex().gap_2();
         if self.brokers.is_empty() {
             list = list.child(
@@ -728,48 +655,18 @@ impl BrokerWizard {
             } else {
                 broker.display_label.clone()
             };
-<<<<<<< Updated upstream
             let connected = broker.status == "connected";
-=======
-            let connected = broker.status.state == "connected";
-            let blurb = broker.blurb.clone();
->>>>>>> Stashed changes
             list = list.child(
-                div()
-                    .id(SharedString::from(broker.id.clone()))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if connected { border_focused } else { border })
-                    .bg(if connected { row_selected } else { row_bg })
-                    .hover(move |style| style.bg(row_hover))
-                    .cursor_pointer()
+                Button::new(SharedString::from(broker.id.clone()), title)
+                    .style(if connected {
+                        ButtonStyle::Filled
+                    } else {
+                        ButtonStyle::Outlined
+                    })
+                    .full_width()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_broker(id.clone(), cx);
-                    }))
-                    .child(brand_tile(&broker.id, &title))
-                    .child(v_flex().flex_1().child(Label::new(title.clone())).when(
-                        !blurb.is_empty(),
-                        |this| {
-                            this.child(
-                                Label::new(blurb.clone())
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                        },
-                    ))
-                    .when(connected, |this| {
-                        this.child(
-                            Label::new("Connected")
-                                .size(LabelSize::Small)
-                                .color(Color::Success),
-                        )
-                    }),
+                    })),
             );
         }
         v_flex()
@@ -830,19 +727,7 @@ impl BrokerWizard {
                 }
                 segmented.into_any_element()
             } else if i < self.editors.len() {
-                // Box the editor like the IDE's other credential inputs
-                // (SettingsInputField): a rounded, bordered field on the editor
-                // surface, instead of bare text floating on the page.
-                div()
-                    .w_full()
-                    .py_1()
-                    .px_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().colors().border)
-                    .bg(cx.theme().colors().editor_background)
-                    .child(self.editors[i].clone())
-                    .into_any_element()
+                self.editors[i].clone().into_any_element()
             } else {
                 Label::new("Set this field from the web console for now.")
                     .size(LabelSize::Small)
@@ -1004,204 +889,6 @@ impl Render for BrokerWizard {
     }
 }
 
-<<<<<<< Updated upstream
-=======
-/// The native "Connect QuantConnect" sub-page on the Connections settings page.
-///
-/// A two-field credential form (user ID + API token) that mirrors the broker
-/// connect flow's hosting model: a dedicated [`Render`] entity whose editors are
-/// built once on push so their focus survives re-renders. Saving writes the
-/// credentials *through* the engine into the Key Master vault (the token never
-/// touches IDE disk) and bumps [`ConnectGeneration`] so the connections status
-/// chip re-polls; Disconnect clears the stored credentials.
-pub struct QuantConnectConnect {
-    focus_handle: FocusHandle,
-    user_id_editor: Entity<editor::Editor>,
-    token_editor: Entity<editor::Editor>,
-    state: TestState,
-    scroll_handle: gpui::ScrollHandle,
-    _task: Option<Task<()>>,
-}
-
-impl QuantConnectConnect {
-    /// Build the page entity and its two credential editors. Called by the
-    /// settings window when the "Connect QuantConnect" sub-page is pushed, where
-    /// a `Window` + `&mut App` are available so the editors persist across renders.
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self {
-            focus_handle: cx.focus_handle(),
-            user_id_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-            token_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-            state: TestState::Idle,
-            scroll_handle: gpui::ScrollHandle::new(),
-            _task: None,
-        }
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let user_id = self.user_id_editor.read(cx).text(cx).trim().to_string();
-        let api_token = self.token_editor.read(cx).text(cx).trim().to_string();
-        if user_id.is_empty() || api_token.is_empty() {
-            self.state = TestState::Verdict {
-                ok: false,
-                plain: "Enter both your QuantConnect user ID and API token.".into(),
-            };
-            cx.notify();
-            return;
-        }
-        let http = cx.http_client();
-        self.state = TestState::Testing;
-        cx.notify();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let result = save_quantconnect_credentials(http, &user_id, &api_token).await;
-            this.update(cx, |this, cx| match result {
-                // Authenticated: the connections chip should re-poll, and the
-                // sub-page can close — the card now reads connected.
-                Ok(true) => {
-                    let generation = cx.global::<ConnectGeneration>().0 + 1;
-                    cx.set_global(ConnectGeneration(generation));
-                    cx.emit(DismissEvent);
-                }
-                // Stored but rejected — honest feedback, never a fake success.
-                Ok(false) => {
-                    this.state = TestState::Verdict {
-                        ok: false,
-                        plain: "Saved, but QuantConnect didn't accept these credentials. \
-                                Check your user ID and API token, then try again."
-                            .into(),
-                    };
-                    cx.notify();
-                }
-                Err(error) => {
-                    this.state = TestState::Verdict {
-                        ok: false,
-                        plain: SharedString::from(format!("Couldn't save: {error}.")),
-                    };
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-    }
-
-    fn disconnect(&mut self, cx: &mut Context<Self>) {
-        let http = cx.http_client();
-        self.state = TestState::Testing;
-        cx.notify();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let result = clear_quantconnect_credentials(http).await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => {
-                    let generation = cx.global::<ConnectGeneration>().0 + 1;
-                    cx.set_global(ConnectGeneration(generation));
-                    cx.emit(DismissEvent);
-                }
-                Err(error) => {
-                    this.state = TestState::Verdict {
-                        ok: false,
-                        plain: SharedString::from(format!("Couldn't disconnect: {error}.")),
-                    };
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-    }
-}
-
-impl EventEmitter<DismissEvent> for QuantConnectConnect {}
-
-impl Focusable for QuantConnectConnect {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for QuantConnectConnect {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let verdict: Option<(Color, SharedString)> = match &self.state {
-            TestState::Idle => None,
-            TestState::Testing => Some((Color::Muted, "Working…".into())),
-            TestState::Verdict { ok, plain } => Some((
-                if *ok { Color::Success } else { Color::Error },
-                plain.clone(),
-            )),
-        };
-        // Resolve the field border once so the per-field builder doesn't reborrow
-        // the context while the element tree is under construction.
-        let border = cx.theme().colors().border;
-        let editor_bg = cx.theme().colors().editor_background;
-        let field = |label: &str, hint: &str, editor: Entity<editor::Editor>| {
-            v_flex()
-                .gap_1()
-                .child(Label::new(label.to_string()).size(LabelSize::Small))
-                .child(
-                    div()
-                        .w_full()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(border)
-                        .bg(editor_bg)
-                        .child(editor),
-                )
-                .child(
-                    Label::new(hint.to_string())
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted),
-                )
-        };
-
-        v_flex()
-            .id("quantconnect-connect-page")
-            .track_focus(&self.focus_handle)
-            .size_full()
-            .pt_2()
-            .px_8()
-            .pb_16()
-            .gap_3()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll_handle)
-            .child(
-                Label::new("Connect QuantConnect to import your LEAN strategies into Auracle.")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-            .child(field(
-                "User ID",
-                "Your numeric QuantConnect user ID (from quantconnect.com/account).",
-                self.user_id_editor.clone(),
-            ))
-            .child(field(
-                "API token",
-                "Stored in your engine's vault — never written to this app's disk.",
-                self.token_editor.clone(),
-            ))
-            .when_some(verdict, |this, (color, plain)| {
-                this.child(Label::new(plain).size(LabelSize::Small).color(color))
-            })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(
-                        Button::new("qc-disconnect", "Disconnect")
-                            .style(ButtonStyle::Subtle)
-                            .tab_index(0_isize)
-                            .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-                    )
-                    .child(
-                        Button::new("qc-save", "Save")
-                            .style(ButtonStyle::Filled)
-                            .tab_index(0_isize)
-                            .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                    ),
-            )
-    }
-}
-
->>>>>>> Stashed changes
 #[cfg(test)]
 mod tests {
     use super::{engine_provider_to_ide, ide_provider_to_engine};
