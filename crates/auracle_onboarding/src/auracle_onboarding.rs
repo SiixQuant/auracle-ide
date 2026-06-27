@@ -44,7 +44,7 @@ use ui::prelude::*;
 use workspace::notifications::NotificationId;
 use workspace::{ModalView, Toast, Workspace};
 
-use auracle_connections::{BrokerSummary, Capability, FieldMeta};
+use auracle_connections::{Capability, Connector, FieldMeta};
 
 actions!(
     auracle,
@@ -157,7 +157,7 @@ fn show_first_run_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>)
 async fn any_broker_connected(http: Arc<dyn http_client::HttpClient>) -> bool {
     auracle_connections::list_brokers(http)
         .await
-        .map(|brokers| brokers.iter().any(|broker| broker.status == "connected"))
+        .map(|brokers| brokers.iter().any(|broker| broker.status.is_connected()))
         .unwrap_or(false)
 }
 
@@ -195,11 +195,12 @@ fn seed_shared_default_model(workspace: &Workspace, cx: &mut Context<Workspace>)
     // Visible, non-cloud providers, with the engine's designated default
     // provider tried first so a configured Claude key wins over any other
     // saved credentials.
-    let mut candidates: Vec<Arc<dyn LanguageModelProvider>> = LanguageModelRegistry::read_global(cx)
-        .visible_providers()
-        .into_iter()
-        .filter(|provider| provider.id() != ZED_CLOUD_PROVIDER_ID)
-        .collect();
+    let mut candidates: Vec<Arc<dyn LanguageModelProvider>> =
+        LanguageModelRegistry::read_global(cx)
+            .visible_providers()
+            .into_iter()
+            .filter(|provider| provider.id() != ZED_CLOUD_PROVIDER_ID)
+            .collect();
     if candidates.is_empty() {
         return;
     }
@@ -309,7 +310,7 @@ pub struct OnboardingWizard {
 
     // Step 1 — broker
     broker_phase: BrokerPhase,
-    brokers: Vec<BrokerSummary>,
+    brokers: Vec<Connector>,
     selected_broker: Option<String>,
     fields: Vec<FieldMeta>,
     /// Fixed pool of single-line editors bound to `fields` by index, so no
@@ -340,11 +341,7 @@ pub struct OnboardingWizard {
 }
 
 impl OnboardingWizard {
-    fn new(
-        workspace: WeakEntity<Workspace>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
         for _ in 0..auracle_connections::MAX_FIELDS {
             editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
@@ -735,7 +732,7 @@ impl OnboardingWizard {
                     } else {
                         broker.display_label.clone()
                     };
-                    let connected = broker.status == "connected";
+                    let connected = broker.status.is_connected();
                     list = list.child(
                         Button::new(SharedString::from(broker.id.clone()), title)
                             .style(if connected {
@@ -784,8 +781,11 @@ impl OnboardingWizard {
                         label = format!("{label}  (optional)");
                     }
                     let input = if field.kind == "select" {
-                        let selected =
-                            self.selections.get(&field.name).cloned().unwrap_or_default();
+                        let selected = self
+                            .selections
+                            .get(&field.name)
+                            .cloned()
+                            .unwrap_or_default();
                         let mut segmented = h_flex().gap_1();
                         for option in field.options.clone() {
                             let field_name = field.name.clone();
@@ -801,10 +801,12 @@ impl OnboardingWizard {
                                 } else {
                                     ButtonStyle::Outlined
                                 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selections.insert(field_name.clone(), chosen.clone());
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.selections.insert(field_name.clone(), chosen.clone());
+                                        cx.notify();
+                                    },
+                                )),
                             );
                         }
                         segmented.into_any_element()
@@ -819,11 +821,7 @@ impl OnboardingWizard {
                     form = form.child(
                         v_flex()
                             .gap_1()
-                            .child(
-                                Label::new(label)
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
+                            .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                             .child(input),
                     );
                 }
@@ -951,10 +949,7 @@ impl OnboardingWizard {
 
     fn render_github(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let status: (Color, SharedString) = match &self.github_state {
-            GitHubAuthState::Unknown => (
-                Color::Muted,
-                "GitHub status not checked yet.".into(),
-            ),
+            GitHubAuthState::Unknown => (Color::Muted, "GitHub status not checked yet.".into()),
             GitHubAuthState::Checking => (Color::Muted, "Checking…".into()),
             GitHubAuthState::SignedIn(line) => (Color::Success, line.clone()),
             GitHubAuthState::SignedOut => (
