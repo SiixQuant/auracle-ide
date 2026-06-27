@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_panel_common::panel_header;
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -89,9 +90,9 @@ impl RunsDock {
                 } else {
                     Status::Connecting
                 };
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| this.reconnect(cx),
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.reconnect(cx)
+                })
                 .detach();
                 let mut this = Self {
                     focus_handle: cx.focus_handle(),
@@ -116,14 +117,8 @@ impl RunsDock {
             );
             let mut backoff = Duration::from_secs(2);
             loop {
-                let attempt = run_stream_once(
-                    http.clone(),
-                    &config.base_url,
-                    &cookie,
-                    &this,
-                    cx,
-                )
-                .await;
+                let attempt =
+                    run_stream_once(http.clone(), &config.base_url, &cookie, &this, cx).await;
                 let keep_going = this
                     .update(cx, |this, cx| {
                         this.status = Status::Reconnecting;
@@ -252,9 +247,7 @@ async fn run_stream_once(
             let frame: String = pending.drain(..idx + 2).collect();
             for line in frame.lines() {
                 if let Some(json) = line.strip_prefix("data: ") {
-                    if let Ok(value) =
-                        serde_json::from_str::<serde_json::Value>(json)
-                    {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
                         this.update(cx, |this, cx| {
                             this.push_event(&value);
                             cx.notify();
@@ -341,20 +334,15 @@ impl Render for RunsDock {
                     Button::new("runs-connect", "Connect…")
                         .style(ButtonStyle::Filled)
                         .on_click(|_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(auracle_connect::Connect),
-                                cx,
-                            );
+                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
                         }),
                 )
                 .into_any_element(),
             _ if self.rows.is_empty() => v_flex()
                 .p_3()
                 .child(
-                    Label::new(
-                        "Runs appear here the moment something executes.",
-                    )
-                    .color(Color::Muted),
+                    Label::new("Runs appear here the moment something executes.")
+                        .color(Color::Muted),
                 )
                 .into_any_element(),
             _ => v_flex()
@@ -371,20 +359,9 @@ impl Render for RunsDock {
                         .px_2()
                         .py_0p5()
                         .gap_2()
-                        .tooltip(move |_, cx| {
-                            ui::Tooltip::simple(kind.clone(), cx)
-                        })
-                        .child(
-                            div()
-                                .size_1p5()
-                                .rounded_full()
-                                .flex_none()
-                                .bg(color),
-                        )
-                        .child(
-                            Label::new(row.plain.clone())
-                                .size(LabelSize::Small),
-                        )
+                        .tooltip(move |_, cx| ui::Tooltip::simple(kind.clone(), cx))
+                        .child(div().size_1p5().rounded_full().flex_none().bg(color))
+                        .child(Label::new(row.plain.clone()).size(LabelSize::Small))
                         .child(div().flex_1())
                         .child(
                             Label::new(row.ts.clone())
@@ -401,17 +378,7 @@ impl Render for RunsDock {
             .size_full()
             .bg(cx.theme().colors().panel_background)
             .child(
-                h_flex()
-                    .px_2()
-                    .py_1()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().colors().border_variant)
-                    .child(
-                        Label::new("RUNS")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    )
+                panel_header("RUNS", cx)
                     .child(
                         Label::new("· Monitor")
                             .size(LabelSize::XSmall)

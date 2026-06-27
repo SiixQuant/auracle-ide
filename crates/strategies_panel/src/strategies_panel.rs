@@ -11,6 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_panel_common::{
+    PanelStatus as Status, PlaceholderLabels, panel_header, placeholder_body,
+};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
@@ -50,14 +53,6 @@ struct StrategyRow {
     bundled: bool,
 }
 
-#[derive(Clone, PartialEq)]
-enum Status {
-    NotConnected,
-    Loading,
-    Connected,
-    Unreachable,
-}
-
 pub struct StrategiesPanel {
     focus_handle: FocusHandle,
     workspace: WeakEntity<Workspace>,
@@ -74,24 +69,18 @@ impl StrategiesPanel {
         let handle = workspace.clone();
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.strategies.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.status = Status::Loading;
+                    this.strategies.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
                     workspace: handle,
                     strategies: Vec::new(),
-                    status: if auracle_connect::load_config().api_key.is_some() {
-                        Status::Loading
-                    } else {
-                        Status::NotConnected
-                    },
+                    status: Status::initial(),
                     _poll: poll,
                 }
             })
@@ -100,33 +89,24 @@ impl StrategiesPanel {
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_strategies(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.strategies.clear();
-                            }
-                            FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
-                            }
-                            FetchResult::Ok(items) => {
-                                this.status = Status::Connected;
-                                this.strategies = items;
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || fetch_strategies(http.clone()),
+            |this, fetched, _cx| match fetched {
+                FetchResult::NotConnected => {
+                    this.status = Status::NotConnected;
+                    this.strategies.clear();
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                FetchResult::Unreachable => {
+                    this.status = Status::Unreachable;
+                }
+                FetchResult::Ok(items) => {
+                    this.status = Status::Connected;
+                    this.strategies = items;
+                }
+            },
+        )
     }
 
     /// Resolve a dotted module path to an absolute `.py` file under the
@@ -298,101 +278,69 @@ impl Panel for StrategiesPanel {
 
 impl Render for StrategiesPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .border_b_1()
-            .border_color(cx.theme().colors().border_variant)
-            .child(
-                Label::new("STRATEGIES")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .child(
-                Label::new("· open in editor")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            );
+        let header = panel_header("STRATEGIES", cx).child(
+            Label::new("· open in editor")
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        );
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
-                .p_3()
-                .gap_2()
-                .child(Label::new("Not connected to your Auracle engine yet."))
-                .child(
-                    Button::new("strategies-connect", "Connect…")
-                        .style(ButtonStyle::Filled)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
-                        }),
-                )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Loading…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.strategies.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("No strategies yet. Create one under strategies/ and it shows up here.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
-                .id("strategies-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_0p5()
-                .children(self.strategies.iter().enumerate().map(|(ix, row)| {
-                    let path = row.path.clone();
-                    let doc = row.doc.clone();
-                    h_flex()
-                        .id(("strategy-row", ix))
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .items_start()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().colors().element_hover))
-                        .on_click(cx.listener(move |this, _ev, window, cx| {
-                            this.open_strategy(path.clone(), window, cx);
-                        }))
-                        .child(
-                            v_flex()
-                                .gap_0p5()
-                                .child(
-                                    h_flex()
-                                        .gap_1p5()
-                                        .child(Label::new(row.name.clone()).size(LabelSize::Small))
-                                        .when(row.bundled, |s| {
-                                            s.child(
-                                                Label::new("example")
-                                                    .size(LabelSize::XSmall)
-                                                    .color(Color::Muted),
+        let labels = PlaceholderLabels::new(
+            "strategies-connect",
+            "Loading…",
+            "No strategies yet. Create one under strategies/ and it shows up here.",
+        );
+        let body: AnyElement =
+            match placeholder_body(&self.status, self.strategies.is_empty(), &labels) {
+                Some(placeholder) => placeholder,
+                None => v_flex()
+                    .id("strategies-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .p_1()
+                    .gap_0p5()
+                    .children(self.strategies.iter().enumerate().map(|(ix, row)| {
+                        let path = row.path.clone();
+                        let doc = row.doc.clone();
+                        h_flex()
+                            .id(("strategy-row", ix))
+                            .px_2()
+                            .py_1()
+                            .gap_2()
+                            .items_start()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(cx.theme().colors().element_hover))
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                this.open_strategy(path.clone(), window, cx);
+                            }))
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        h_flex()
+                                            .gap_1p5()
+                                            .child(
+                                                Label::new(row.name.clone()).size(LabelSize::Small),
                                             )
-                                        }),
-                                )
-                                .when(!doc.is_empty(), |s| {
-                                    s.child(
-                                        Label::new(doc)
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
+                                            .when(row.bundled, |s| {
+                                                s.child(
+                                                    Label::new("example")
+                                                        .size(LabelSize::XSmall)
+                                                        .color(Color::Muted),
+                                                )
+                                            }),
                                     )
-                                }),
-                        )
-                }))
-                .into_any_element(),
-        };
+                                    .when(!doc.is_empty(), |s| {
+                                        s.child(
+                                            Label::new(doc)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            )
+                    }))
+                    .into_any_element(),
+            };
 
         v_flex()
             .key_context("StrategiesPanel")

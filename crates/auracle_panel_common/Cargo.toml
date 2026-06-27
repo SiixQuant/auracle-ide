@@ -1,24 +1,18 @@
 [package]
-name = "auracle_status"
+name = "auracle_panel_common"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 license = "GPL-3.0-or-later"
 
 [lib]
-path = "src/auracle_status.rs"
+path = "src/auracle_panel_common.rs"
 doctest = false
 
 [lints]
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 auracle_connect.workspace = true
-auracle_panel_common.workspace = true
-futures.workspace = true
 gpui.workspace = true
-http_client.workspace = true
-serde_json.workspace = true
 ui.workspace = true
-workspace.workspace = true

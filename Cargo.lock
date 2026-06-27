@@ -1451,11 +1451,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_panel_common"
+version = "0.1.0"
+dependencies = [
+ "auracle_connect",
+ "gpui",
+ "ui",
+]
+
+[[package]]
 name = "auracle_status"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -2449,6 +2459,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -9047,6 +9058,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -15632,6 +15644,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -15671,8 +15684,8 @@ name = "runway_rail"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auracle_agent_commands",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -16054,6 +16067,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -17587,6 +17601,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",
@@ -20023,6 +20038,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
  "http_client",

@@ -74,9 +74,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(ConnectGeneration::default());
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &Connect, window, cx| {
-            workspace.toggle_modal(window, cx, |window, cx| {
-                ConnectModal::new(window, cx)
-            });
+            workspace.toggle_modal(window, cx, |window, cx| ConnectModal::new(window, cx));
         });
     })
     .detach();
@@ -126,11 +124,7 @@ impl ConnectModal {
         let existing = load_config();
         let url_editor = cx.new(|cx| {
             let mut e = editor::Editor::single_line(window, cx);
-            e.set_text(
-                existing.engine_url.clone().unwrap_or_default(),
-                window,
-                cx,
-            );
+            e.set_text(existing.engine_url.clone().unwrap_or_default(), window, cx);
             e
         });
         let key_editor = cx.new(|cx| {
@@ -263,6 +257,66 @@ async fn test_connection(
         ));
     }
     Ok(verdict)
+}
+
+/// Fetch the double-submit CSRF token: GET `/ui/api/status` so the engine
+/// issues an `auracle_csrf` cookie, then return its value to echo back as
+/// the `X-CSRF-Token` header on a mutation. We hit `/ui/api/status` (not an
+/// HTML page) so the cookie still flows under the headless web profile.
+pub async fn fetch_csrf(
+    http: Arc<dyn http_client::HttpClient>,
+    base_url: &str,
+    key: &str,
+) -> String {
+    let Ok(request) = http_client::http::Request::builder()
+        .uri(format!("{base_url}/ui/api/status"))
+        .header("X-API-Key", key)
+        .header("Cookie", format!("auracle_session={key}"))
+        .body(http_client::AsyncBody::default())
+    else {
+        return String::new();
+    };
+    let Ok(response) = http.send(request).await else {
+        return String::new();
+    };
+    for value in response.headers().get_all("set-cookie") {
+        let Ok(cookie) = value.to_str() else { continue };
+        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
+            return rest.split(';').next().unwrap_or("").to_string();
+        }
+    }
+    String::new()
+}
+
+/// POST a `/ui/api` mutation with the dual auth headers + the double-submit
+/// CSRF token, over loopback. The given routes take an empty body. Returns
+/// the result so the caller can react — never logs the request (the session
+/// key in the headers must not reach the logs).
+pub async fn post_mutation(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<()> {
+    let config = load_config();
+    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+        anyhow::bail!("not connected");
+    };
+    let base_url = config
+        .engine_url
+        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    let csrf = fetch_csrf(http.clone(), &base_url, &key).await;
+    let request = http_client::http::Request::builder()
+        .method("POST")
+        .uri(format!("{base_url}{path}"))
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", key.clone())
+        .header("X-CSRF-Token", csrf.clone())
+        .header(
+            "Cookie",
+            format!("auracle_session={key}; auracle_csrf={csrf}"),
+        )
+        .body(http_client::AsyncBody::default())?;
+    let response = http.send(request).await?;
+    if !response.status().is_success() {
+        anyhow::bail!("status {}", response.status());
+    }
+    Ok(())
 }
 
 impl EventEmitter<DismissEvent> for ConnectModal {}

@@ -11,6 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_connect::post_mutation;
+use auracle_panel_common::{
+    PanelStatus as Status, PlaceholderLabels, panel_header, placeholder_body,
+};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -53,14 +57,6 @@ struct Order {
     broker_order_id: Option<SharedString>,
 }
 
-#[derive(Clone, PartialEq)]
-enum Status {
-    NotConnected,
-    Loading,
-    Connected,
-    Unreachable,
-}
-
 pub struct BlotterPanel {
     focus_handle: FocusHandle,
     orders: Vec<Order>,
@@ -81,23 +77,17 @@ impl BlotterPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.orders.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.status = Status::Loading;
+                    this.orders.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
                     orders: Vec::new(),
-                    status: if auracle_connect::load_config().api_key.is_some() {
-                        Status::Loading
-                    } else {
-                        Status::NotConnected
-                    },
+                    status: Status::initial(),
                     _poll: poll,
                     _action: None,
                     last_error: None,
@@ -108,34 +98,25 @@ impl BlotterPanel {
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_orders(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.orders.clear();
-                            }
-                            FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
-                            }
-                            FetchResult::Ok(items) => {
-                                this.status = Status::Connected;
-                                this.orders = items;
-                                this.last_error = None;
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || fetch_orders(http.clone()),
+            |this, fetched, _cx| match fetched {
+                FetchResult::NotConnected => {
+                    this.status = Status::NotConnected;
+                    this.orders.clear();
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                FetchResult::Unreachable => {
+                    this.status = Status::Unreachable;
+                }
+                FetchResult::Ok(items) => {
+                    this.status = Status::Connected;
+                    this.orders = items;
+                    this.last_error = None;
+                }
+            },
+        )
     }
 
     fn status_color(&self, status: &str, cx: &App) -> Hsla {
@@ -158,13 +139,7 @@ impl BlotterPanel {
     fn is_cancellable(status: &str) -> bool {
         matches!(
             status.to_lowercase().as_str(),
-            "pending"
-                | "sent"
-                | "partially_filled"
-                | "working"
-                | "open"
-                | "submitted"
-                | "routed"
+            "pending" | "sent" | "partially_filled" | "working" | "open" | "submitted" | "routed"
         )
     }
 
@@ -178,7 +153,8 @@ impl BlotterPanel {
                 post_mutation(http.clone(), &format!("/ui/api/orders/cancel/{order_id}")).await
             {
                 this.update(cx, |this, cx| {
-                    this.last_error = Some(SharedString::from(format!("Couldn't cancel: {error}.")));
+                    this.last_error =
+                        Some(SharedString::from(format!("Couldn't cancel: {error}.")));
                     cx.notify();
                 })
                 .ok();
@@ -288,64 +264,6 @@ async fn fetch_orders(http: Arc<dyn http_client::HttpClient>) -> FetchResult {
     }
 }
 
-/// Fetch the double-submit CSRF token: GET `/ui/api/status` so the engine
-/// issues an `auracle_csrf` cookie, then return its value to echo back as
-/// the `X-CSRF-Token` header on the mutation. Mirrors
-/// `auracle_connections::fetch_csrf` — we hit `/ui/api/status` (not an HTML
-/// page) so the cookie still flows under the headless web profile.
-async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, base_url: &str, key: &str) -> String {
-    let Ok(request) = http_client::http::Request::builder()
-        .uri(format!("{base_url}/ui/api/status"))
-        .header("X-API-Key", key)
-        .header("Cookie", format!("auracle_session={key}"))
-        .body(http_client::AsyncBody::default())
-    else {
-        return String::new();
-    };
-    let Ok(response) = http.send(request).await else {
-        return String::new();
-    };
-    for value in response.headers().get_all("set-cookie") {
-        let Ok(cookie) = value.to_str() else { continue };
-        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
-            return rest.split(';').next().unwrap_or("").to_string();
-        }
-    }
-    String::new()
-}
-
-/// POST a `/ui/api` mutation with the dual auth headers + the double-submit
-/// CSRF token, over loopback. Mirrors `auracle_connections::post_json`; the
-/// cancel routes take an empty body. Returns the result so the caller can
-/// react — never logs the request (the session key in the headers must not
-/// reach the logs).
-async fn post_mutation(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<()> {
-    let config = auracle_connect::load_config();
-    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
-        anyhow::bail!("not connected");
-    };
-    let base_url = config
-        .engine_url
-        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let csrf = fetch_csrf(http.clone(), &base_url, &key).await;
-    let request = http_client::http::Request::builder()
-        .method("POST")
-        .uri(format!("{base_url}{path}"))
-        .header("Content-Type", "application/json")
-        .header("X-API-Key", key.clone())
-        .header("X-CSRF-Token", csrf.clone())
-        .header(
-            "Cookie",
-            format!("auracle_session={key}; auracle_csrf={csrf}"),
-        )
-        .body(http_client::AsyncBody::default())?;
-    let response = http.send(request).await?;
-    if !response.status().is_success() {
-        anyhow::bail!("status {}", response.status());
-    }
-    Ok(())
-}
-
 impl EventEmitter<PanelEvent> for BlotterPanel {}
 
 impl Focusable for BlotterPanel {
@@ -411,17 +329,7 @@ impl Render for BlotterPanel {
                 .iter()
                 .any(|order| Self::is_cancellable(&order.status));
 
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .border_b_1()
-            .border_color(cx.theme().colors().border_variant)
-            .child(
-                Label::new("BLOTTER")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
+        let header = panel_header("BLOTTER", cx)
             .child(
                 // Provenance, so a novice never mistakes this for a
                 // live broker feed: it's Auracle's own order records.
@@ -443,41 +351,15 @@ impl Render for BlotterPanel {
                 )
             });
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
-                .p_3()
-                .gap_2()
-                .child(Label::new("Not connected to your Auracle engine yet."))
-                .child(
-                    Button::new("blotter-connect", "Connect…")
-                        .style(ButtonStyle::Filled)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(auracle_connect::Connect),
-                                cx,
-                            );
-                        }),
-                )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Checking…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.orders.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("No orders yet. Trades show up here once a strategy places them.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
+        let labels = PlaceholderLabels::new(
+            "blotter-connect",
+            "Checking…",
+            "No orders yet. Trades show up here once a strategy places them.",
+        );
+        let body: AnyElement = match placeholder_body(&self.status, self.orders.is_empty(), &labels)
+        {
+            Some(placeholder) => placeholder,
+            None => v_flex()
                 .id("blotter-scroll")
                 .size_full()
                 .overflow_y_scroll()
@@ -501,17 +383,8 @@ impl Render for BlotterPanel {
                         .gap_2()
                         .items_start()
                         .rounded_sm()
-                        .child(
-                            div()
-                                .mt_1()
-                                .size_1p5()
-                                .rounded_full()
-                                .flex_none()
-                                .bg(dot),
-                        )
-                        .child(
-                            Label::new(order.plain.clone()).size(LabelSize::Small),
-                        )
+                        .child(div().mt_1().size_1p5().rounded_full().flex_none().bg(dot))
+                        .child(Label::new(order.plain.clone()).size(LabelSize::Small))
                         .when_some(cancel_target, |row, order_id| {
                             row.child(div().flex_1()).child(
                                 Button::new(
@@ -522,9 +395,11 @@ impl Render for BlotterPanel {
                                 .label_size(LabelSize::XSmall)
                                 .color(Color::Error)
                                 .tooltip(ui::Tooltip::text("Cancel this working order"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.cancel_order(order_id.clone(), cx);
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.cancel_order(order_id.clone(), cx);
+                                    },
+                                )),
                             )
                         })
                 }))

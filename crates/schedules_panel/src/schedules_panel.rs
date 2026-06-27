@@ -12,6 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_connect::post_mutation;
+use auracle_panel_common::{
+    PanelStatus as Status, PlaceholderLabels, panel_header, placeholder_body,
+};
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Pixels, SharedString,
@@ -48,14 +52,6 @@ struct ScheduleRow {
     enabled: bool,
 }
 
-#[derive(Clone, PartialEq)]
-enum Status {
-    NotConnected,
-    Loading,
-    Connected,
-    Unreachable,
-}
-
 pub struct SchedulesPanel {
     focus_handle: FocusHandle,
     schedules: Vec<ScheduleRow>,
@@ -82,23 +78,17 @@ impl SchedulesPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.status = Status::Loading;
-                        this.schedules.clear();
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.status = Status::Loading;
+                    this.schedules.clear();
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
                     focus_handle: cx.focus_handle(),
                     schedules: Vec::new(),
-                    status: if auracle_connect::load_config().api_key.is_some() {
-                        Status::Loading
-                    } else {
-                        Status::NotConnected
-                    },
+                    status: Status::initial(),
                     _poll: poll,
                     _action: None,
                     delete_armed: HashSet::new(),
@@ -110,34 +100,25 @@ impl SchedulesPanel {
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_schedules(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            FetchResult::NotConnected => {
-                                this.status = Status::NotConnected;
-                                this.schedules.clear();
-                            }
-                            FetchResult::Unreachable => {
-                                this.status = Status::Unreachable;
-                            }
-                            FetchResult::Ok(items) => {
-                                this.status = Status::Connected;
-                                this.schedules = items;
-                                this.last_error = None;
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || fetch_schedules(http.clone()),
+            |this, fetched, _cx| match fetched {
+                FetchResult::NotConnected => {
+                    this.status = Status::NotConnected;
+                    this.schedules.clear();
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                FetchResult::Unreachable => {
+                    this.status = Status::Unreachable;
+                }
+                FetchResult::Ok(items) => {
+                    this.status = Status::Connected;
+                    this.schedules = items;
+                    this.last_error = None;
+                }
+            },
+        )
     }
 
     /// POST a schedule mutation, then refetch so the row reflects the new
@@ -263,64 +244,6 @@ async fn fetch_schedules(http: Arc<dyn http_client::HttpClient>) -> FetchResult 
     }
 }
 
-/// Fetch the double-submit CSRF token: GET `/ui/api/status` so the engine
-/// issues an `auracle_csrf` cookie, then return its value to echo back as
-/// the `X-CSRF-Token` header on the mutation. Mirrors
-/// `auracle_connections::fetch_csrf` — we hit `/ui/api/status` (not an HTML
-/// page) so the cookie still flows under the headless web profile.
-async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, base_url: &str, key: &str) -> String {
-    let Ok(request) = http_client::http::Request::builder()
-        .uri(format!("{base_url}/ui/api/status"))
-        .header("X-API-Key", key)
-        .header("Cookie", format!("auracle_session={key}"))
-        .body(http_client::AsyncBody::default())
-    else {
-        return String::new();
-    };
-    let Ok(response) = http.send(request).await else {
-        return String::new();
-    };
-    for value in response.headers().get_all("set-cookie") {
-        let Ok(cookie) = value.to_str() else { continue };
-        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
-            return rest.split(';').next().unwrap_or("").to_string();
-        }
-    }
-    String::new()
-}
-
-/// POST a `/ui/api` mutation with the dual auth headers + the double-submit
-/// CSRF token, over loopback. Mirrors `auracle_connections::post_json`; these
-/// schedule routes take an empty body. Returns the result so the caller can
-/// react — never logs the request (the session key in the headers must not
-/// reach the logs).
-async fn post_mutation(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<()> {
-    let config = auracle_connect::load_config();
-    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
-        anyhow::bail!("not connected");
-    };
-    let base_url = config
-        .engine_url
-        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let csrf = fetch_csrf(http.clone(), &base_url, &key).await;
-    let request = http_client::http::Request::builder()
-        .method("POST")
-        .uri(format!("{base_url}{path}"))
-        .header("Content-Type", "application/json")
-        .header("X-API-Key", key.clone())
-        .header("X-CSRF-Token", csrf.clone())
-        .header(
-            "Cookie",
-            format!("auracle_session={key}; auracle_csrf={csrf}"),
-        )
-        .body(http_client::AsyncBody::default())?;
-    let response = http.send(request).await?;
-    if !response.status().is_success() {
-        anyhow::bail!("status {}", response.status());
-    }
-    Ok(())
-}
-
 impl EventEmitter<PanelEvent> for SchedulesPanel {}
 
 impl Focusable for SchedulesPanel {
@@ -377,165 +300,137 @@ impl Panel for SchedulesPanel {
 
 impl Render for SchedulesPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .border_b_1()
-            .border_color(cx.theme().colors().border_variant)
-            .child(
-                Label::new("SCHEDULES")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .child(
-                Label::new("· what's deployed")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            );
+        let header = panel_header("SCHEDULES", cx).child(
+            Label::new("· what's deployed")
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        );
 
-        let body: AnyElement = match self.status {
-            Status::NotConnected => v_flex()
-                .p_3()
-                .gap_2()
-                .child(Label::new("Not connected to your Auracle engine yet."))
-                .child(
-                    Button::new("schedules-connect", "Connect…")
-                        .style(ButtonStyle::Filled)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(auracle_connect::Connect), cx);
-                        }),
-                )
-                .into_any_element(),
-            Status::Loading => v_flex()
-                .p_3()
-                .child(Label::new("Loading…").color(Color::Muted))
-                .into_any_element(),
-            Status::Unreachable => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected if self.schedules.is_empty() => v_flex()
-                .p_3()
-                .child(
-                    Label::new("Nothing deployed yet. Deploy a strategy and it appears here.")
-                        .color(Color::Muted),
-                )
-                .into_any_element(),
-            Status::Connected => v_flex()
-                .id("schedules-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_0p5()
-                .children(self.schedules.iter().map(|row| {
-                    let dot = if row.enabled {
-                        cx.theme().status().success
-                    } else {
-                        cx.theme().status().ignored
-                    };
-                    let name = row.name.clone();
-                    // Label Pause/Resume from the row's current paused state
-                    // (enabled == running → "Pause"; paused → "Resume").
-                    let toggle_label = if row.enabled { "Pause" } else { "Resume" };
-                    let toggle_name = name.clone();
-                    let run_name = name.clone();
-                    let delete_name = name.clone();
-                    let delete_armed = self.delete_armed.contains(&name);
-                    h_flex()
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .items_start()
-                        .rounded_sm()
-                        .child(div().mt_1().size_1p5().rounded_full().flex_none().bg(dot))
-                        .child(
-                            v_flex()
-                                .gap_0p5()
-                                .child(Label::new(row.name.clone()).size(LabelSize::Small))
-                                .child(
-                                    h_flex()
-                                        .gap_1p5()
-                                        .child(
-                                            Label::new(row.strategy.clone())
-                                                .size(LabelSize::XSmall)
-                                                .color(Color::Muted),
-                                        )
-                                        .child(
-                                            Label::new(row.cron.clone())
-                                                .size(LabelSize::XSmall)
-                                                .color(Color::Muted),
-                                        )
-                                        .when(!row.enabled, |s| {
-                                            s.child(
-                                                Label::new("paused")
+        let labels = PlaceholderLabels::new(
+            "schedules-connect",
+            "Loading…",
+            "Nothing deployed yet. Deploy a strategy and it appears here.",
+        );
+        let body: AnyElement =
+            match placeholder_body(&self.status, self.schedules.is_empty(), &labels) {
+                Some(placeholder) => placeholder,
+                None => v_flex()
+                    .id("schedules-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .p_1()
+                    .gap_0p5()
+                    .children(self.schedules.iter().map(|row| {
+                        let dot = if row.enabled {
+                            cx.theme().status().success
+                        } else {
+                            cx.theme().status().ignored
+                        };
+                        let name = row.name.clone();
+                        // Label Pause/Resume from the row's current paused state
+                        // (enabled == running → "Pause"; paused → "Resume").
+                        let toggle_label = if row.enabled { "Pause" } else { "Resume" };
+                        let toggle_name = name.clone();
+                        let run_name = name.clone();
+                        let delete_name = name.clone();
+                        let delete_armed = self.delete_armed.contains(&name);
+                        h_flex()
+                            .px_2()
+                            .py_1()
+                            .gap_2()
+                            .items_start()
+                            .rounded_sm()
+                            .child(div().mt_1().size_1p5().rounded_full().flex_none().bg(dot))
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(Label::new(row.name.clone()).size(LabelSize::Small))
+                                    .child(
+                                        h_flex()
+                                            .gap_1p5()
+                                            .child(
+                                                Label::new(row.strategy.clone())
                                                     .size(LabelSize::XSmall)
                                                     .color(Color::Muted),
                                             )
-                                        }),
-                                ),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .flex_none()
-                                .child(
-                                    Button::new(
-                                        SharedString::from(format!("sched-toggle-{name}")),
-                                        toggle_label,
-                                    )
-                                    .style(ButtonStyle::Subtle)
-                                    .label_size(LabelSize::XSmall)
-                                    .tooltip(ui::Tooltip::text(if row.enabled {
-                                        "Pause this schedule (keeps it, stops the cron)"
-                                    } else {
-                                        "Resume this schedule"
-                                    }))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.toggle(toggle_name.clone(), cx);
-                                    })),
-                                )
-                                .child(
-                                    Button::new(
-                                        SharedString::from(format!("sched-run-{name}")),
-                                        "Run now",
-                                    )
-                                    .style(ButtonStyle::Subtle)
-                                    .label_size(LabelSize::XSmall)
-                                    .tooltip(ui::Tooltip::text("Run this schedule once now"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.run_now(run_name.clone(), cx);
-                                    })),
-                                )
-                                .child(
-                                    Button::new(
-                                        SharedString::from(format!("sched-delete-{name}")),
-                                        if delete_armed {
-                                            "Confirm delete"
+                                            .child(
+                                                Label::new(row.cron.clone())
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted),
+                                            )
+                                            .when(!row.enabled, |s| {
+                                                s.child(
+                                                    Label::new("paused")
+                                                        .size(LabelSize::XSmall)
+                                                        .color(Color::Muted),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .flex_none()
+                                    .child(
+                                        Button::new(
+                                            SharedString::from(format!("sched-toggle-{name}")),
+                                            toggle_label,
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .label_size(LabelSize::XSmall)
+                                        .tooltip(ui::Tooltip::text(if row.enabled {
+                                            "Pause this schedule (keeps it, stops the cron)"
                                         } else {
-                                            "Delete"
-                                        },
+                                            "Resume this schedule"
+                                        }))
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.toggle(toggle_name.clone(), cx);
+                                            }),
+                                        ),
                                     )
-                                    .style(ButtonStyle::Subtle)
-                                    .label_size(LabelSize::XSmall)
-                                    .color(Color::Error)
-                                    .tooltip(ui::Tooltip::text(if delete_armed {
-                                        "Click again to remove this schedule"
-                                    } else {
-                                        "Remove this schedule (click twice to confirm)"
-                                    }))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.delete(delete_name.clone(), cx);
-                                    })),
-                                ),
-                        )
-                }))
-                .into_any_element(),
-        };
+                                    .child(
+                                        Button::new(
+                                            SharedString::from(format!("sched-run-{name}")),
+                                            "Run now",
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .label_size(LabelSize::XSmall)
+                                        .tooltip(ui::Tooltip::text("Run this schedule once now"))
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.run_now(run_name.clone(), cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new(
+                                            SharedString::from(format!("sched-delete-{name}")),
+                                            if delete_armed {
+                                                "Confirm delete"
+                                            } else {
+                                                "Delete"
+                                            },
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .label_size(LabelSize::XSmall)
+                                        .color(Color::Error)
+                                        .tooltip(ui::Tooltip::text(if delete_armed {
+                                            "Click again to remove this schedule"
+                                        } else {
+                                            "Remove this schedule (click twice to confirm)"
+                                        }))
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.delete(delete_name.clone(), cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                    }))
+                    .into_any_element(),
+            };
 
         v_flex()
             .key_context("SchedulesPanel")
