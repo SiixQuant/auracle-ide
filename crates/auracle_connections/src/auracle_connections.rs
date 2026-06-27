@@ -1,83 +1,103 @@
-//! The guided broker-connect wizard — one reusable component.
+//! Engine connection client + the unified connector data model.
 //!
-//! A three-step flow (choose broker → enter credentials → confirm
-//! capabilities) rendered natively in GPUI. It is introspection-driven:
-//! the broker list, the credential FIELDS, and the data/paper/live +
-//! asset-kind capability chips all arrive as plain JSON from the engine,
-//! so adding a broker engine-side needs no change here.
+//! The IDE's single connect surface (the docked settings panel) reads and
+//! mutates every connection through this crate. Whether a connector trades
+//! (kind `broker`), serves prices (kind `data_provider`), or bridges another
+//! platform (kind `integration`, e.g. QuantConnect), it arrives as the SAME
+//! [`Connector`] JSON shape from the engine's unified `/ui/api/connections`
+//! registry — so one generic flow (list → fields → test → save → disconnect)
+//! covers all three, and the panel's sections are just `kind`-filtered views.
 //!
-//! Honesty laws baked in:
-//!   * capability chips come ONLY from the engine's unified capability
-//!     endpoint — a broker the engine hasn't verified shows a
-//!     "not verified yet" banner, never blank chips that read as
-//!     "anything goes";
-//!   * a tri-state "unknown" renders as "not verified yet", never green;
-//!   * sensitive field VALUES are never fetched or shown — the engine
-//!     returns only a masked preview, and the wizard never logs a body.
+//! Honesty laws (engine-enforced; mirrored here):
+//!   * a connector reads "connected" ONLY when the engine's status says so —
+//!     never a local guess (see [`ConnStatus::is_connected`]);
+//!   * capability + test results come ONLY from a real engine round-trip;
+//!   * sensitive field VALUES are never fetched — the engine returns only a
+//!     masked preview + a `has_value` flag, and we never log a request body.
 //!
-//! The same component serves Settings (Browse) and, later, the deploy
-//! gate (Scoped to a strategy's broker) via [`WizardScope`]. Transport +
-//! auth reuse [`auracle_connect`] (loopback engine_url + api_key).
+//! Transport + auth reuse [`auracle_connect`] (loopback engine_url + api_key,
+//! CSRF double-submit). The reusable functions are `pub` so the settings panel
+//! drives them directly without re-deriving the header dance.
 
 use std::sync::Arc;
 
 use anyhow::Result;
-use auracle_connect::{AuracleConfig, ConnectGeneration, load_config};
+use auracle_connect::{AuracleConfig, load_config};
 use futures::AsyncReadExt as _;
-use gpui::{
-    App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Task, Window,
-    actions,
-};
+use gpui::{App, SharedString, actions};
 use serde::Deserialize;
 use ui::prelude::*;
-use workspace::{ModalView, Workspace};
 
 actions!(
     auracle,
     [
-        /// Open the broker connection wizard.
+        /// Open the Auracle connections surface. Retained for the deploy path
+        /// and the settings deep-link; both now focus the docked settings
+        /// panel (the one connect surface) rather than a modal wizard.
         OpenBrokerWizard
     ]
 );
 
 pub const MAX_FIELDS: usize = 10;
 
-pub fn init(cx: &mut App) {
-    cx.observe_new(|workspace: &mut Workspace, _, _| {
-        workspace.register_action(|workspace, _: &OpenBrokerWizard, window, cx| {
-            workspace.toggle_modal(window, cx, |window, cx| BrokerWizard::new(window, cx));
-        });
-    })
-    .detach();
-}
-
-// ── Wizard scope: one component, two mount points ────────────────────
-
-/// Where the wizard is mounted. `Browse` is the Settings home (full
-/// broker grid); `Scoped` is the deploy-time gate, opened straight to the
-/// broker a strategy needs with the asset kinds it must satisfy.
-/// `Scoped` is wired by the deploy-mount increment.
-#[allow(dead_code)]
-#[derive(Clone)]
-pub enum WizardScope {
-    Browse,
-    Scoped {
-        broker: String,
-        required_kinds: Vec<String>,
-    },
-}
+/// No-op: the connect surface is the docked settings panel, which registers the
+/// handlers for [`OpenBrokerWizard`] and `OpenConnections` itself. Kept so the
+/// existing `main.rs` init call site stays stable.
+pub fn init(_cx: &mut App) {}
 
 // ── Engine JSON shapes (introspection-driven) ────────────────────────
 
+/// One connector's live status, exactly as the engine reports it
+/// (`{"state": ..., "detail": ...}`). `state` is the engine's vocabulary:
+/// `connected` | `not_configured` | `error` | broker runtime states
+/// (`connecting`/`disconnected`/`degraded`/…). `detail` carries the human
+/// reason when the state isn't a clean success.
 #[derive(Clone, Deserialize, Default)]
-pub struct BrokerSummary {
+pub struct ConnStatus {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl ConnStatus {
+    /// True only when the engine reports a live, configured connection. Every
+    /// other state (not_configured, error, disconnected, degraded, …) is honest
+    /// about NOT being connected.
+    pub fn is_connected(&self) -> bool {
+        self.state == "connected"
+    }
+}
+
+/// One connector in the unified registry. The list endpoint returns these with
+/// `fields` empty; the detail endpoint fills `fields` (with `has_value`/preview
+/// flags) for the credentials form.
+#[derive(Clone, Deserialize, Default)]
+pub struct Connector {
     pub id: String,
     #[serde(default)]
     pub display_label: String,
     #[serde(default)]
     pub blurb: String,
+    /// `broker` | `data_provider` | `integration`.
     #[serde(default)]
-    pub status: String,
+    pub kind: String,
+    #[serde(default)]
+    pub status: ConnStatus,
+    /// Credential fields — empty in list responses, populated in detail.
+    #[serde(default)]
+    pub fields: Vec<FieldMeta>,
+    #[serde(default)]
+    pub asset_kinds: Vec<String>,
+    /// Whether the engine exposes a real Test probe for this connector. When
+    /// false the panel shows Save-only (no fake green from a missing tester).
+    #[serde(default)]
+    pub test_supported: bool,
+    /// Whether the operator's tier blocks connecting this connector.
+    #[serde(default)]
+    pub gated: bool,
+    #[serde(default)]
+    pub gated_reason: String,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -111,6 +131,34 @@ pub struct Capability {
     pub reason: String,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+// ── Account (read-only identity surface) ──────────────────────────────
+
+/// The IDE-facing license block from `GET /ui/api/account`. `state` is
+/// `active` | `expired` | `none`.
+#[derive(Clone, Deserialize, Default)]
+pub struct LicenseStatus {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub expiry: Option<String>,
+}
+
+/// The operator's account as the engine reports it. Carries no secret — the
+/// engine never returns a key here (PRD invariant I3). `manage_url` is the
+/// billing-portal URL when one is configured, else `None` (the panel hides the
+/// button rather than show a dead control).
+#[derive(Clone, Deserialize, Default)]
+pub struct Account {
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub tier: String,
+    #[serde(default)]
+    pub license_status: LicenseStatus,
+    #[serde(default)]
+    pub manage_url: Option<String>,
 }
 
 // ── Shared settings (cross-store sync source of truth) ───────────────
@@ -150,183 +198,35 @@ pub struct AiModelState {
     pub configured: bool,
 }
 
-// ── Wizard entity ────────────────────────────────────────────────────
+// ── Pure reducers (engine-free; unit-tested) ──────────────────────────
 
-#[derive(Clone, Copy, PartialEq)]
-enum Step {
-    ChooseBroker,
-    Credentials,
-    Confirm,
+/// A one-line, honest status summary for a section of connectors. Pure so the
+/// section headers stay testable without the engine.
+pub fn section_summary(connectors: &[Connector]) -> String {
+    if connectors.is_empty() {
+        return "None available".to_string();
+    }
+    let connected = connectors
+        .iter()
+        .filter(|connector| connector.status.is_connected())
+        .count();
+    let total = connectors.len();
+    match connected {
+        0 => "None connected".to_string(),
+        n if n == total && total == 1 => "Connected".to_string(),
+        n if n == total => format!("All {total} connected"),
+        n => format!("{n} of {total} connected"),
+    }
 }
 
-enum TestState {
-    Idle,
-    Testing,
-    Verdict { ok: bool, plain: SharedString },
-}
-
-pub struct BrokerWizard {
-    focus_handle: FocusHandle,
-    scope: WizardScope,
-    step: Step,
-    brokers: Vec<BrokerSummary>,
-    selected: Option<String>,
-    fields: Vec<FieldMeta>,
-    /// Fixed pool of single-line editors bound to `fields` by index, so
-    /// no entity is created after `new()` (which would need a `Window`
-    /// the async loaders don't carry). Editors past `fields.len()` go
-    /// unrendered.
-    editors: Vec<Entity<editor::Editor>>,
-    /// Chosen option per `select` field (field name -> option). Select
-    /// fields render as a segmented control, not a free-text editor — the
-    /// paper/live mode picker must be a constrained choice, not freetext.
-    selections: std::collections::HashMap<String, String>,
-    capability: Option<Capability>,
-    state: TestState,
-    _task: Option<Task<()>>,
-}
-
-impl BrokerWizard {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut editors = Vec::with_capacity(MAX_FIELDS);
-        for _ in 0..MAX_FIELDS {
-            editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
-        }
-        let mut this = Self {
-            focus_handle: cx.focus_handle(),
-            scope: WizardScope::Browse,
-            step: Step::ChooseBroker,
-            brokers: Vec::new(),
-            selected: None,
-            fields: Vec::new(),
-            editors,
-            selections: std::collections::HashMap::new(),
-            capability: None,
-            state: TestState::Idle,
-            _task: None,
-        };
-        this.load_brokers(cx);
-        this
-    }
-
-    fn load_brokers(&mut self, cx: &mut Context<Self>) {
-        let http = cx.http_client();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let brokers = list_brokers(http).await.unwrap_or_default();
-            this.update(cx, |this, cx| {
-                this.brokers = brokers;
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
-    fn select_broker(&mut self, broker: String, cx: &mut Context<Self>) {
-        self.selected = Some(broker.clone());
-        self.step = Step::Credentials;
-        self.state = TestState::Idle;
-        self.fields = Vec::new();
-        self.capability = None;
-        cx.notify();
-        let http = cx.http_client();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let fields = get_fields(http.clone(), &broker).await.unwrap_or_default();
-            let capability = get_capability(http, &broker).await.ok();
-            this.update(cx, |this, cx| {
-                // Default each select field to its first option so a paper/
-                // live choice is always explicit, never empty.
-                this.selections.clear();
-                for field in &fields {
-                    if field.kind == "select" {
-                        if let Some(first) = field.options.first() {
-                            this.selections.insert(field.name.clone(), first.clone());
-                        }
-                    }
-                }
-                this.fields = fields;
-                this.capability = capability;
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
-    fn current_body(&self, cx: &App) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        for (i, field) in self.fields.iter().enumerate() {
-            if field.kind == "select" {
-                if let Some(choice) = self.selections.get(&field.name) {
-                    map.insert(
-                        field.name.clone(),
-                        serde_json::Value::String(choice.clone()),
-                    );
-                }
-                continue;
-            }
-            if i >= self.editors.len() {
-                continue;
-            }
-            let value = self.editors[i].read(cx).text(cx);
-            // Skip empty inputs so an unchanged "(saved)" sensitive field
-            // isn't overwritten with blank.
-            if !value.is_empty() {
-                map.insert(field.name.clone(), serde_json::Value::String(value));
-            }
-        }
-        serde_json::Value::Object(map)
-    }
-
-    fn run_test(&mut self, cx: &mut Context<Self>) {
-        let Some(broker) = self.selected.clone() else {
-            return;
-        };
-        let body = self.current_body(cx);
-        let http = cx.http_client();
-        self.state = TestState::Testing;
-        cx.notify();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let result = test_connection(http, &broker, body).await;
-            this.update(cx, |this, cx| {
-                this.state = TestState::Verdict {
-                    ok: result.is_ok(),
-                    plain: SharedString::from(match result {
-                        Ok(message) => message,
-                        Err(error) => format!("Couldn't connect: {error}."),
-                    }),
-                };
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let Some(broker) = self.selected.clone() else {
-            return;
-        };
-        let body = self.current_body(cx);
-        let http = cx.http_client();
-        self.state = TestState::Testing;
-        cx.notify();
-        self._task = Some(cx.spawn(async move |this, cx| {
-            let result = save_connection(http, &broker, body).await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => {
-                    let generation = cx.global::<ConnectGeneration>().0 + 1;
-                    cx.set_global(ConnectGeneration(generation));
-                    cx.emit(DismissEvent);
-                }
-                Err(error) => {
-                    this.state = TestState::Verdict {
-                        ok: false,
-                        plain: SharedString::from(format!("Couldn't save: {error}.")),
-                    };
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-    }
+/// Whether a section should start expanded: a section with nothing connected is
+/// opened on first load to invite the operator to connect; an already-set-up
+/// section starts collapsed to stay out of the way.
+pub fn default_expanded(connectors: &[Connector]) -> bool {
+    !connectors.is_empty()
+        && !connectors
+            .iter()
+            .any(|connector| connector.status.is_connected())
 }
 
 // ── Engine client (loopback; dual auth headers; CSRF double-submit) ───
@@ -365,8 +265,19 @@ pub async fn get_json(
     Ok(serde_json::from_str(&text)?)
 }
 
-pub async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<BrokerSummary>> {
-    let value = get_json(http, "/ui/api/connections").await?;
+/// List connectors of a given `kind` (`broker` | `data_provider` |
+/// `integration` | `all`). An empty `kind` is the back-compatible
+/// brokers-only default the engine ships.
+pub async fn list_connectors(
+    http: Arc<dyn http_client::HttpClient>,
+    kind: &str,
+) -> Result<Vec<Connector>> {
+    let path = if kind.is_empty() {
+        "/ui/api/connections".to_string()
+    } else {
+        format!("/ui/api/connections?kind={kind}")
+    };
+    let value = get_json(http, &path).await?;
     let list = value
         .get("connections")
         .and_then(|v| v.as_array())
@@ -378,11 +289,28 @@ pub async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<
         .collect())
 }
 
+/// Brokers only — the execution connectors. Retained for the first-run wizard;
+/// thin wrapper over [`list_connectors`].
+pub async fn list_brokers(http: Arc<dyn http_client::HttpClient>) -> Result<Vec<Connector>> {
+    list_connectors(http, "broker").await
+}
+
+/// One connector's full detail, including its credential `fields` (with
+/// `has_value`/preview flags). The engine returns the connector object at the
+/// top level, so it deserializes straight into [`Connector`].
+pub async fn get_connector(
+    http: Arc<dyn http_client::HttpClient>,
+    connector: &str,
+) -> Result<Connector> {
+    let value = get_json(http, &format!("/ui/api/connections/{connector}")).await?;
+    Ok(serde_json::from_value(value)?)
+}
+
 pub async fn get_fields(
     http: Arc<dyn http_client::HttpClient>,
-    broker: &str,
+    connector: &str,
 ) -> Result<Vec<FieldMeta>> {
-    let value = get_json(http, &format!("/ui/api/connections/{broker}")).await?;
+    let value = get_json(http, &format!("/ui/api/connections/{connector}")).await?;
     let list = value
         .get("fields")
         .and_then(|v| v.as_array())
@@ -396,9 +324,9 @@ pub async fn get_fields(
 
 pub async fn get_capability(
     http: Arc<dyn http_client::HttpClient>,
-    broker: &str,
+    connector: &str,
 ) -> Result<Capability> {
-    let value = get_json(http, &format!("/ui/api/connections/{broker}/capability")).await?;
+    let value = get_json(http, &format!("/ui/api/connections/{connector}/capability")).await?;
     Ok(serde_json::from_value(value)?)
 }
 
@@ -481,10 +409,10 @@ pub async fn send_json(
 
 pub async fn test_connection(
     http: Arc<dyn http_client::HttpClient>,
-    broker: &str,
+    connector: &str,
     body: serde_json::Value,
 ) -> Result<String> {
-    let value = post_json(http, &format!("/ui/api/connections/{broker}/test"), body).await?;
+    let value = post_json(http, &format!("/ui/api/connections/{connector}/test"), body).await?;
     let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let message = value
         .get("message")
@@ -508,11 +436,34 @@ pub async fn test_connection(
 
 pub async fn save_connection(
     http: Arc<dyn http_client::HttpClient>,
-    broker: &str,
+    connector: &str,
     body: serde_json::Value,
 ) -> Result<()> {
-    post_json(http, &format!("/ui/api/connections/{broker}/save"), body).await?;
+    post_json(http, &format!("/ui/api/connections/{connector}/save"), body).await?;
     Ok(())
+}
+
+/// Clear a connector's saved credentials. The engine wipes the vault/pref
+/// entries and the connector drops back to `not_configured`.
+pub async fn disconnect_connection(
+    http: Arc<dyn http_client::HttpClient>,
+    connector: &str,
+) -> Result<()> {
+    post_json(
+        http,
+        &format!("/ui/api/connections/{connector}/disconnect"),
+        serde_json::json!({}),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Read the operator's account (email, tier, license, billing-portal URL).
+/// Owner-scoped on the engine; on this loopback transport the operator's own
+/// key authenticates. Never carries a secret.
+pub async fn get_account(http: Arc<dyn http_client::HttpClient>) -> Result<Account> {
+    let value = get_json(http, "/ui/api/account").await?;
+    Ok(serde_json::from_value(value)?)
 }
 
 /// Read the shared settings the launcher and IDE both reflect. Owner-scoped on
@@ -570,23 +521,13 @@ pub async fn fetch_ai_key(
     Ok((provider, key))
 }
 
-// ── Render ───────────────────────────────────────────────────────────
-
-impl EventEmitter<DismissEvent> for BrokerWizard {}
-
-impl Focusable for BrokerWizard {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl ModalView for BrokerWizard {}
+// ── Connector brand marks (logo chip / monogram fallback) ─────────────
 
 /// The bundled official logo for a connection, rendered full-colour via `img`
 /// (gpui rasterises SVG). Returns the asset path when we ship a logo for this
-/// broker; unknown brokers fall back to a brand-colour monogram tile. To add
+/// connector; unknown ones fall back to a brand-colour monogram tile. To add
 /// one: drop `assets/icons/brokers/<file>.svg` and map the id here.
-fn broker_logo_path(id: &str) -> Option<&'static str> {
+pub fn broker_logo_path(id: &str) -> Option<&'static str> {
     match id {
         "ibkr" | "ibkr_cp" => Some("icons/brokers/interactive-brokers.svg"),
         "alpaca" => Some("icons/brokers/alpaca.svg"),
@@ -595,7 +536,8 @@ fn broker_logo_path(id: &str) -> Option<&'static str> {
     }
 }
 
-/// Brand colour for the monogram-tile fallback (brokers without a bundled logo).
+/// Brand colour for the monogram-tile fallback (connectors without a bundled
+/// logo).
 fn brand_rgb(id: &str) -> gpui::Rgba {
     match id {
         "clearstreet" => gpui::rgb(0x1466FF),
@@ -606,7 +548,7 @@ fn brand_rgb(id: &str) -> gpui::Rgba {
 }
 
 /// A short, stable monogram for the fallback tile: a curated mark for known
-/// brokers, else the first two alphanumeric characters of the display label.
+/// connectors, else the first two alphanumeric characters of the display label.
 fn brand_monogram(id: &str, label: &str) -> SharedString {
     let curated = match id {
         "clearstreet" => Some("CS"),
@@ -633,7 +575,7 @@ fn brand_monogram(id: &str, label: &str) -> SharedString {
 /// A fixed-height connection mark: the official logo on a clean light chip (so
 /// brand colours read in any theme) when we ship one, otherwise a brand-colour
 /// monogram tile. Sized so every row reads as a deliberate, consistent mark.
-fn brand_tile(id: &str, label: &str) -> AnyElement {
+pub fn brand_tile(id: &str, label: &str) -> AnyElement {
     if let Some(path) = broker_logo_path(id) {
         return div()
             .flex()
@@ -663,304 +605,99 @@ fn brand_tile(id: &str, label: &str) -> AnyElement {
         .into_any_element()
 }
 
-impl BrokerWizard {
-    fn render_choose(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Theme colours copied into Copy locals so the per-row closures don't
-        // hold a borrow of `cx` across `cx.listener`.
-        let border = cx.theme().colors().border;
-        let border_focused = cx.theme().colors().border_focused;
-        let row_bg = cx.theme().colors().ghost_element_background;
-        let row_selected = cx.theme().colors().element_selected;
-        let row_hover = cx.theme().colors().element_hover;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let mut list = v_flex().gap_2();
-        if self.brokers.is_empty() {
-            list = list.child(
-                Label::new("Loading brokers…")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            );
+    fn conn(state: &str) -> Connector {
+        Connector {
+            status: ConnStatus {
+                state: state.into(),
+                detail: None,
+            },
+            ..Default::default()
         }
-        for broker in self.brokers.clone() {
-            let id = broker.id.clone();
-            let title = if broker.display_label.is_empty() {
-                broker.id.clone()
-            } else {
-                broker.display_label.clone()
-            };
-            let connected = broker.status == "connected";
-            let blurb = broker.blurb.clone();
-            let has_logo = broker_logo_path(&broker.id).is_some();
-            list = list.child(
-                div()
-                    .id(SharedString::from(broker.id.clone()))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if connected { border_focused } else { border })
-                    .bg(if connected { row_selected } else { row_bg })
-                    .hover(move |style| style.bg(row_hover))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_broker(id.clone(), cx);
-                    }))
-                    .child(brand_tile(&broker.id, &title))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            // A wordmark logo already names the broker, so only
-                            // show the text name when we're rendering a tile.
-                            .when(!has_logo, |column| column.child(Label::new(title.clone())))
-                            .when(!blurb.is_empty(), |column| {
-                                column.child(
-                                    Label::new(blurb.clone())
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
-                                )
-                            }),
-                    )
-                    .when(connected, |row| {
-                        row.child(
-                            Label::new("Connected")
-                                .size(LabelSize::Small)
-                                .color(Color::Success),
-                        )
-                    }),
-            );
-        }
-        v_flex()
-            .gap_2()
-            .child(Label::new("Choose a broker to connect"))
-            .child(list)
     }
 
-    fn render_credentials(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut form = v_flex().gap_3();
-        if self.fields.is_empty() {
-            form = form.child(
-                Label::new("Loading…")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+    #[test]
+    fn is_connected_only_on_connected_state() {
+        assert!(
+            ConnStatus {
+                state: "connected".into(),
+                detail: None
+            }
+            .is_connected()
+        );
+        for state in ["not_configured", "error", "disconnected", "degraded", ""] {
+            assert!(
+                !ConnStatus {
+                    state: state.into(),
+                    detail: None
+                }
+                .is_connected(),
+                "state {state:?} must not read as connected"
             );
         }
-        for (i, field) in self.fields.iter().enumerate() {
-            let mut label = if field.label.is_empty() {
-                field.name.clone()
-            } else {
-                field.label.clone()
-            };
-            if field.has_value {
-                label = format!("{label}  (saved — leave blank to keep)");
-            } else if !field.required {
-                label = format!("{label}  (optional)");
-            }
-            // A `select` (e.g. the paper/live mode) renders as a segmented
-            // control so the value is always a valid option — never a typo
-            // in a free-text box. Other kinds use the text/password editor.
-            let input = if field.kind == "select" {
-                let selected = self
-                    .selections
-                    .get(&field.name)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut segmented = h_flex().gap_1();
-                for option in field.options.clone() {
-                    let field_name = field.name.clone();
-                    let chosen = option.clone();
-                    let is_selected = option == selected;
-                    segmented = segmented.child(
-                        Button::new(
-                            SharedString::from(format!("sel-{}-{}", field.name, option)),
-                            option,
-                        )
-                        .style(if is_selected {
-                            ButtonStyle::Filled
-                        } else {
-                            ButtonStyle::Outlined
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.selections.insert(field_name.clone(), chosen.clone());
-                            cx.notify();
-                        })),
-                    );
-                }
-                segmented.into_any_element()
-            } else if i < self.editors.len() {
-                // Box the editor like the IDE's other credential inputs: a
-                // rounded, bordered field on the editor surface instead of bare
-                // text floating on the page.
-                div()
-                    .w_full()
-                    .py_1()
-                    .px_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().colors().border)
-                    .bg(cx.theme().colors().editor_background)
-                    .child(self.editors[i].clone())
-                    .into_any_element()
-            } else {
-                Label::new("Set this field from the web console for now.")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted)
-                    .into_any_element()
-            };
-            form = form.child(
-                v_flex()
-                    .gap_1()
-                    .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
-                    .child(input),
-            );
-        }
-        form
     }
 
-    fn render_confirm(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex()
-            .gap_2()
-            .child(Label::new("What this broker can do"));
-        match &self.capability {
-            None => {
-                body = body.child(
-                    Label::new("Checking capabilities…")
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                );
-            }
-            Some(cap) if cap.capabilities.is_empty() => {
-                // Honesty: no verified capability row — never blank chips
-                // that read as "anything goes".
-                body = body.child(
-                    Label::new(if cap.reason.is_empty() {
-                        "Capabilities aren't verified for this broker yet.".to_string()
-                    } else {
-                        cap.reason.clone()
-                    })
-                    .size(LabelSize::Small)
-                    .color(Color::Warning),
-                );
-            }
-            Some(cap) => {
-                let mut chips = h_flex().gap_2();
-                for leg in ["data", "paper", "live"] {
-                    let state = cap
-                        .capabilities
-                        .get(leg)
-                        .map(String::as_str)
-                        .unwrap_or("unknown");
-                    let (text, color) = match state {
-                        "yes" => (format!("{leg}: yes"), Color::Success),
-                        "no" => (format!("{leg}: no"), Color::Muted),
-                        _ => (format!("{leg}: not verified yet"), Color::Warning),
-                    };
-                    chips = chips.child(Label::new(text).size(LabelSize::Small).color(color));
-                }
-                body = body.child(chips);
-                if !cap.asset_kinds.is_empty() {
-                    body = body.child(
-                        Label::new(format!("Trades: {}", cap.asset_kinds.join(", ")))
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    );
-                }
-                if let Some(error) = &cap.error {
-                    body = body.child(
-                        Label::new(format!("Couldn't fully verify: {error}"))
-                            .size(LabelSize::Small)
-                            .color(Color::Warning),
-                    );
-                } else if !cap.ok && !cap.reason.is_empty() {
-                    body = body.child(
-                        Label::new(cap.reason.clone())
-                            .size(LabelSize::Small)
-                            .color(Color::Warning),
-                    );
-                }
-            }
-        }
-        body
+    #[test]
+    fn section_summary_is_honest_about_counts() {
+        assert_eq!(section_summary(&[]), "None available");
+        assert_eq!(
+            section_summary(&[conn("not_configured"), conn("error")]),
+            "None connected"
+        );
+        assert_eq!(section_summary(&[conn("connected")]), "Connected");
+        assert_eq!(
+            section_summary(&[conn("connected"), conn("connected")]),
+            "All 2 connected"
+        );
+        assert_eq!(
+            section_summary(&[conn("connected"), conn("not_configured")]),
+            "1 of 2 connected"
+        );
     }
-}
 
-impl Render for BrokerWizard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let verdict: Option<(Color, SharedString)> = match &self.state {
-            TestState::Idle => None,
-            TestState::Testing => Some((Color::Muted, "Working…".into())),
-            TestState::Verdict { ok, plain } => Some((
-                if *ok { Color::Success } else { Color::Error },
-                plain.clone(),
-            )),
-        };
-        let step = self.step;
-        let has_selection = self.selected.is_some();
+    #[test]
+    fn default_expanded_opens_only_when_nothing_connected() {
+        assert!(!default_expanded(&[]));
+        assert!(default_expanded(&[conn("not_configured")]));
+        assert!(!default_expanded(&[conn("connected")]));
+        assert!(!default_expanded(&[
+            conn("connected"),
+            conn("not_configured")
+        ]));
+    }
 
-        v_flex()
-            .key_context("BrokerWizard")
-            .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
-                cx.emit(DismissEvent);
-            }))
-            .w(rems(34.))
-            .p_4()
-            .gap_3()
-            .bg(cx.theme().colors().elevated_surface_background)
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().colors().border)
-            .child(Label::new("Connect a broker").size(LabelSize::Large))
-            .map(|this| match step {
-                Step::ChooseBroker => this.child(self.render_choose(cx)),
-                Step::Credentials => this.child(self.render_credentials(cx)),
-                Step::Confirm => this.child(self.render_confirm(cx)),
-            })
-            .when_some(verdict, |this, (color, plain)| {
-                this.child(Label::new(plain).size(LabelSize::Small).color(color))
-            })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(step != Step::ChooseBroker, |row| {
-                        row.child(
-                            Button::new("wiz-back", "Back")
-                                .style(ButtonStyle::Subtle)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.step = match this.step {
-                                        Step::Confirm => Step::Credentials,
-                                        _ => Step::ChooseBroker,
-                                    };
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .when(step == Step::Credentials && has_selection, |row| {
-                        row.child(
-                            Button::new("wiz-test", "Test")
-                                .style(ButtonStyle::Outlined)
-                                .on_click(cx.listener(|this, _, _, cx| this.run_test(cx))),
-                        )
-                        .child(
-                            Button::new("wiz-next", "Next")
-                                .style(ButtonStyle::Outlined)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.step = Step::Confirm;
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .when(step == Step::Confirm && has_selection, |row| {
-                        row.child(
-                            Button::new("wiz-save", "Connect")
-                                .style(ButtonStyle::Filled)
-                                .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                        )
-                    }),
-            )
+    #[test]
+    fn connector_deserializes_status_object() {
+        let json = serde_json::json!({
+            "id": "ibkr",
+            "display_label": "Interactive Brokers",
+            "kind": "broker",
+            "status": {"state": "connected"},
+            "test_supported": true,
+            "gated": false
+        });
+        let connector: Connector = serde_json::from_value(json).unwrap();
+        assert_eq!(connector.id, "ibkr");
+        assert_eq!(connector.kind, "broker");
+        assert!(connector.status.is_connected());
+        assert!(connector.test_supported);
+        assert!(!connector.gated);
+    }
+
+    #[test]
+    fn account_deserializes_without_secret() {
+        let json = serde_json::json!({
+            "email": "ops@example.com",
+            "tier": "institutional",
+            "license_status": {"state": "active", "expiry": "2027-01-01"},
+            "manage_url": null
+        });
+        let account: Account = serde_json::from_value(json).unwrap();
+        assert_eq!(account.email, "ops@example.com");
+        assert_eq!(account.license_status.state, "active");
+        assert!(account.manage_url.is_none());
     }
 }
