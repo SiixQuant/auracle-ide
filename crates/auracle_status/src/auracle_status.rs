@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::AsyncReadExt as _;
-use gpui::{App, Entity, EventEmitter, Hsla, SharedString, Task, WeakEntity, Window};
-use ui::prelude::*;
+use gpui::{App, Entity, EventEmitter, Hsla, SharedString, Task, Window};
 use ui::Tooltip;
+use ui::prelude::*;
 use workspace::{StatusItemView, Workspace, item::ItemHandle};
 
 const POLL_EVERY: Duration = Duration::from_secs(30);
@@ -63,21 +63,14 @@ impl AuracleStatus {
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let next = poll_once(http.clone()).await;
-                if this
-                    .update(cx, |this, cx| {
-                        this.state = next.clone();
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || poll_once(http.clone()),
+            |this, next, _cx| {
+                this.state = next;
+            },
+        )
     }
 }
 
@@ -113,9 +106,8 @@ async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
             .get("brokers")
             .and_then(|v| v.as_array())
             .and_then(|arr| {
-                arr.iter().find(|b| {
-                    b.get("active").and_then(|a| a.as_bool()).unwrap_or(false)
-                })
+                arr.iter()
+                    .find(|b| b.get("active").and_then(|a| a.as_bool()).unwrap_or(false))
             })
             .and_then(|b| b.get("plain").and_then(|p| p.as_str()))
             .or_else(|| value.get("plain").and_then(|p| p.as_str()))
@@ -139,8 +131,7 @@ impl Render for AuracleStatus {
             EngineState::NotConnected => (
                 cx.theme().colors().text_muted,
                 "engine: not connected".into(),
-                "Your Auracle engine isn't connected yet. Click to connect."
-                    .into(),
+                "Your Auracle engine isn't connected yet. Click to connect.".into(),
             ),
             EngineState::Checking => (
                 cx.theme().status().warning,
@@ -161,7 +152,11 @@ impl Render for AuracleStatus {
             } => {
                 // Glance text answers "can I go live?" in one word;
                 // the tooltip carries the engine's full plain sentence.
-                let mode = if *live_allowed { "live ok" } else { "paper only" };
+                let mode = if *live_allowed {
+                    "live ok"
+                } else {
+                    "paper only"
+                };
                 let license_note = if *live_allowed {
                     "Real-money trading is allowed by your license — \
                      paper stays the default."
@@ -178,9 +173,7 @@ impl Render for AuracleStatus {
                     cx.theme().status().success,
                     // "on" (not "live") so the word never collides with
                     // live trading — the mode token owns that meaning.
-                    SharedString::from(format!(
-                        "engine: on · broker: {broker} · {mode}"
-                    )),
+                    SharedString::from(format!("engine: on · broker: {broker} · {mode}")),
                     SharedString::from(tip),
                 )
             }
@@ -191,11 +184,7 @@ impl Render for AuracleStatus {
             .gap_1p5()
             .px_1()
             .child(div().size_1p5().rounded_full().bg(dot))
-            .child(
-                Label::new(text)
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
+            .child(Label::new(text).size(LabelSize::Small).color(Color::Muted))
             .tooltip(Tooltip::text(tip))
             .on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(auracle_connect::Connect), cx);

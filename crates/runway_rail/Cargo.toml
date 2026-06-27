@@ -15,6 +15,7 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 auracle_connect.workspace = true
+auracle_panel_common.workspace = true
 futures.workspace = true
 http_client.workspace = true
 serde_json.workspace = true

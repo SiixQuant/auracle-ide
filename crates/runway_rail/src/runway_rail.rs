@@ -36,9 +36,17 @@ const POLL_EVERY: Duration = Duration::from_secs(60);
 const STAGES: [(&str, &str, &str); 6] = [
     ("research", "Research", "Look at markets, data, and ideas."),
     ("build", "Build", "Shape an idea into a strategy."),
-    ("validate", "Validate", "Test it against the past, honestly."),
+    (
+        "validate",
+        "Validate",
+        "Test it against the past, honestly.",
+    ),
     ("paper", "Paper", "Practice with pretend money."),
-    ("go_live", "Go live", "Real money — only after every gate is green."),
+    (
+        "go_live",
+        "Go live",
+        "Real money — only after every gate is green.",
+    ),
     ("monitor", "Monitor", "Watch everything that runs."),
 ];
 
@@ -77,12 +85,10 @@ impl RunwayRail {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.truth = None;
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.truth = None;
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_poll(cx);
                 Self {
@@ -97,29 +103,20 @@ impl RunwayRail {
 
     fn spawn_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_runway(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            Some(truth) => {
-                                this.truth = Some(truth);
-                                this.connected = true;
-                            }
-                            None => {
-                                this.connected = false;
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || fetch_runway(http.clone()),
+            |this, fetched, _cx| match fetched {
+                Some(truth) => {
+                    this.truth = Some(truth);
+                    this.connected = true;
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                None => {
+                    this.connected = false;
+                }
+            },
+        )
     }
 }
 
@@ -248,16 +245,11 @@ impl Render for RunwayRail {
             .p_2()
             .gap_1()
             .child(
-                h_flex()
-                    .px_1()
-                    .pb_1()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Label::new("RUNWAY")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    ),
+                h_flex().px_1().pb_1().items_center().gap_2().child(
+                    Label::new("RUNWAY")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                ),
             )
             .children(STAGES.iter().enumerate().map(|(ix, (key, name, hint))| {
                 let stage = truth
@@ -319,19 +311,11 @@ impl Render for RunwayRail {
                     .py_0p5()
                     .gap_2()
                     .rounded_sm()
-                    .child(
-                        Icon::new(icon)
-                            .size(IconSize::XSmall)
-                            .color(icon_color),
-                    )
+                    .child(Icon::new(icon).size(IconSize::XSmall).color(icon_color))
                     .child(Label::new(*name).color(label_color))
                     .child(div().flex_1())
                     .when_some(marker, |row, m| {
-                        row.child(
-                            Label::new(m)
-                                .size(LabelSize::XSmall)
-                                .color(marker_color),
-                        )
+                        row.child(Label::new(m).size(LabelSize::XSmall).color(marker_color))
                     })
                     .tooltip(Tooltip::text(tooltip_text))
             }))
@@ -366,10 +350,7 @@ impl Render for RunwayRail {
                             Button::new("runway-connect", "Connect…")
                                 .style(ButtonStyle::Filled)
                                 .on_click(|_, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(auracle_connect::Connect),
-                                        cx,
-                                    );
+                                    window.dispatch_action(Box::new(auracle_connect::Connect), cx);
                                 }),
                         ),
                 )

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use auracle_panel_common::panel_header;
 use futures::AsyncReadExt as _;
 use gpui::{
     App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Pixels,
@@ -87,16 +88,14 @@ impl ValidationRail {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |_workspace, _window, cx| {
             cx.new(|cx| {
-                cx.observe_global::<auracle_connect::ConnectGeneration>(
-                    |this: &mut Self, cx| {
-                        this.conn = Conn::Loading;
-                        this.strategies.clear();
-                        this.selected = None;
-                        this.verdict = None;
-                        this.measure_error = None;
-                        cx.notify();
-                    },
-                )
+                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+                    this.conn = Conn::Loading;
+                    this.strategies.clear();
+                    this.selected = None;
+                    this.verdict = None;
+                    this.measure_error = None;
+                    cx.notify();
+                })
                 .detach();
                 let poll = Self::spawn_list_poll(cx);
                 Self {
@@ -120,35 +119,26 @@ impl ValidationRail {
 
     fn spawn_list_poll(cx: &mut Context<Self>) -> Task<()> {
         let http = cx.http_client();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let fetched = fetch_strategies(http.clone()).await;
-                let ok = this
-                    .update(cx, |this, cx| {
-                        match fetched {
-                            ListResult::NotConnected => {
-                                this.conn = Conn::NotConnected;
-                                this.strategies.clear();
-                            }
-                            ListResult::Unreachable => {
-                                if this.strategies.is_empty() {
-                                    this.conn = Conn::Unreachable;
-                                }
-                            }
-                            ListResult::Ok(items) => {
-                                this.conn = Conn::Ready;
-                                this.strategies = items;
-                            }
-                        }
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !ok {
-                    return;
+        auracle_panel_common::spawn_poll(
+            cx,
+            POLL_EVERY,
+            move || fetch_strategies(http.clone()),
+            |this, fetched, _cx| match fetched {
+                ListResult::NotConnected => {
+                    this.conn = Conn::NotConnected;
+                    this.strategies.clear();
                 }
-                cx.background_executor().timer(POLL_EVERY).await;
-            }
-        })
+                ListResult::Unreachable => {
+                    if this.strategies.is_empty() {
+                        this.conn = Conn::Unreachable;
+                    }
+                }
+                ListResult::Ok(items) => {
+                    this.conn = Conn::Ready;
+                    this.strategies = items;
+                }
+            },
+        )
     }
 
     fn select(&mut self, path: SharedString, cx: &mut Context<Self>) {
@@ -219,7 +209,7 @@ fn engine() -> Option<(String, String)> {
     let url = config
         .engine_url
         .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    Some((url.to_string(), key.to_string()))
+    Some((url, key))
 }
 
 async fn get_json(
@@ -313,7 +303,12 @@ async fn fetch_validation(
 }
 
 fn field(v: &serde_json::Value, key: &str) -> SharedString {
-    SharedString::from(v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string())
+    SharedString::from(
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    )
 }
 
 fn urlencode(s: &str) -> String {
@@ -366,22 +361,11 @@ impl Panel for ValidationRail {
 
 impl Render for ValidationRail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .border_b_1()
-            .border_color(cx.theme().colors().border_variant)
-            .child(
-                Label::new("VALIDATION")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .child(
-                Label::new("· Validate")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            );
+        let header = panel_header("VALIDATION", cx).child(
+            Label::new("· Validate")
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        );
 
         let body: AnyElement = match self.conn {
             Conn::NotConnected => v_flex()
@@ -403,8 +387,7 @@ impl Render for ValidationRail {
             Conn::Unreachable => v_flex()
                 .p_3()
                 .child(
-                    Label::new("Your engine didn't answer. It may be stopped.")
-                        .color(Color::Muted),
+                    Label::new("Your engine didn't answer. It may be stopped.").color(Color::Muted),
                 )
                 .into_any_element(),
             Conn::Ready => {
@@ -432,10 +415,8 @@ impl ValidationRail {
             return v_flex()
                 .p_3()
                 .child(
-                    Label::new(
-                        "No strategies yet. Build one first, then come back to check it.",
-                    )
-                    .color(Color::Muted),
+                    Label::new("No strategies yet. Build one first, then come back to check it.")
+                        .color(Color::Muted),
                 )
                 .into_any_element();
         }
@@ -488,7 +469,7 @@ impl ValidationRail {
 
         let mut col = v_flex().size_full().child(back).child(
             div().px_2().child(
-                Label::new(selected.clone())
+                Label::new(selected)
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),
@@ -507,14 +488,19 @@ impl ValidationRail {
                     .p_3()
                     .gap_1()
                     .child(Label::new("Couldn't check this strategy.").color(Color::Warning))
-                    .child(Label::new(err.clone()).size(LabelSize::XSmall).color(Color::Muted)),
+                    .child(
+                        Label::new(err.clone())
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
             );
         }
         if let Some(verdict) = &self.verdict {
             col = col.child(
-                div().px_2().py_1().child(
-                    Label::new(verdict.summary.clone()).size(LabelSize::Small),
-                ),
+                div()
+                    .px_2()
+                    .py_1()
+                    .child(Label::new(verdict.summary.clone()).size(LabelSize::Small)),
             );
             let rows = v_flex()
                 .id("validation-signals")
@@ -536,14 +522,11 @@ impl ValidationRail {
                                 .gap_2()
                                 .items_center()
                                 .id(SharedString::from(format!("sig-{}", sig.name)))
-                                .on_click(cx.listener({
-                                    let key = key.clone();
-                                    move |this, _, _, cx| {
-                                        if !this.expanded.remove(&key) {
-                                            this.expanded.insert(key.clone());
-                                        }
-                                        cx.notify();
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.expanded.remove(&key) {
+                                        this.expanded.insert(key.clone());
                                     }
+                                    cx.notify();
                                 }))
                                 .child(div().size_2().rounded_full().flex_none().bg(dot))
                                 .child(Label::new(sig.name.clone()).size(LabelSize::Small))
@@ -565,12 +548,9 @@ impl ValidationRail {
                                     )
                                     .when(!sig.fix.is_empty(), |c| {
                                         c.child(
-                                            Label::new(format!(
-                                                "Usually fixed by: {}",
-                                                sig.fix
-                                            ))
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
+                                            Label::new(format!("Usually fixed by: {}", sig.fix))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
                                         )
                                     }),
                             )
