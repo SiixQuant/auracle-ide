@@ -17,6 +17,7 @@ use editor::actions::OpenExcerpts;
 use crate::completion_provider::AvailableSkill;
 use crate::message_editor::SharedSessionCapabilities;
 
+use chrono::{Local, Timelike};
 use db::kvp::KeyValueStore;
 use gpui::List;
 use gpui::Stateful;
@@ -4048,17 +4049,19 @@ impl ThreadView {
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
         let fills_container = !has_messages || editor_expanded;
+        let is_focused = focus_handle.is_focused(window);
+        // Greet the user on a fresh thread; once the conversation starts, the
+        // composer drops back to the bottom of the panel.
+        let show_hero = !has_messages && !editor_expanded;
 
         h_flex()
             .p_2()
-            .bg(editor_bg_color)
+            .bg(cx.theme().colors().panel_background)
             .justify_center()
             .on_action(cx.listener(Self::handle_message_editor_move_up))
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
-                        .border_t_1()
-                        .border_color(cx.theme().colors().border)
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))
                 } else {
                     this.flex_1().size_full()
@@ -4071,81 +4074,175 @@ impl ThreadView {
                     .when(fills_container, |this| this.h_full())
                     .flex_shrink_1()
                     .flex_grow_0()
-                    .justify_between()
-                    .gap_2()
+                    .gap_3()
+                    .when(show_hero, |this| {
+                        this.justify_center().child(self.render_agent_greeting(cx))
+                    })
                     .child(
+                        // Composer card: a rounded, bordered surface that brightens
+                        // its border on focus. Every color is a theme token so the
+                        // card tracks IDE theme changes.
                         v_flex()
-                            .relative()
-                            .w_full()
-                            .min_h_0()
-                            .when(fills_container, |this| this.flex_1())
-                            .pt_1()
-                            .pr_2p5()
-                            .child(self.message_editor.clone())
-                            .when(has_messages, |this| {
-                                this.child(
-                                    h_flex()
-                                        .absolute()
-                                        .top_0()
-                                        .right_0()
-                                        .opacity(0.5)
-                                        .hover(|s| s.opacity(1.0))
-                                        .child(
-                                            IconButton::new("toggle-height", expand_icon)
-                                                .icon_size(IconSize::Small)
-                                                .icon_color(Color::Muted)
-                                                .tooltip({
-                                                    move |_window, cx| {
-                                                        Tooltip::for_action_in(
-                                                            expand_tooltip,
-                                                            &ExpandMessageEditor,
-                                                            &focus_handle,
-                                                            cx,
-                                                        )
-                                                    }
-                                                })
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.expand_message_editor(
-                                                        &ExpandMessageEditor,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                })),
-                                        ),
-                                )
-                            }),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .flex_none()
-                            .flex_wrap()
+                            .when(editor_expanded, |this| this.flex_1())
                             .justify_between()
+                            .gap_2()
+                            .rounded_xl()
+                            .border_1()
+                            .border_color(if is_focused {
+                                cx.theme().colors().border_focused
+                            } else {
+                                cx.theme().colors().border
+                            })
+                            .bg(editor_bg_color)
+                            .shadow_sm()
+                            .overflow_hidden()
+                            .px_3()
+                            .pt_2()
+                            .pb_2()
                             .child(
-                                h_flex()
-                                    .gap_0p5()
-                                    .child(self.render_add_context_button(cx))
-                                    .child(self.render_follow_toggle(cx))
-                                    .children(self.render_fast_mode_control(cx))
-                                    .children(self.render_thinking_control(cx)),
+                                v_flex()
+                                    .relative()
+                                    .w_full()
+                                    .min_h_0()
+                                    .when(editor_expanded, |this| this.flex_1())
+                                    .pt_1()
+                                    .pr_2p5()
+                                    .child(self.message_editor.clone())
+                                    .when(has_messages, |this| {
+                                        this.child(
+                                            h_flex()
+                                                .absolute()
+                                                .top_0()
+                                                .right_0()
+                                                .opacity(0.5)
+                                                .hover(|s| s.opacity(1.0))
+                                                .child(
+                                                    IconButton::new("toggle-height", expand_icon)
+                                                        .icon_size(IconSize::Small)
+                                                        .icon_color(Color::Muted)
+                                                        .tooltip({
+                                                            move |_window, cx| {
+                                                                Tooltip::for_action_in(
+                                                                    expand_tooltip,
+                                                                    &ExpandMessageEditor,
+                                                                    &focus_handle,
+                                                                    cx,
+                                                                )
+                                                            }
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.expand_message_editor(
+                                                                    &ExpandMessageEditor,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                    }),
                             )
                             .child(
                                 h_flex()
+                                    .w_full()
+                                    .flex_none()
                                     .flex_wrap()
-                                    .gap_1()
-                                    .children(self.render_token_usage(cx))
-                                    .children(self.profile_selector.clone())
-                                    .map(|this| match self.config_options_view.clone() {
-                                        Some(config_view) => this.child(config_view),
-                                        None => this
-                                            .children(self.mode_selector.clone())
-                                            .children(self.model_selector.clone()),
-                                    })
-                                    .child(self.render_send_button(cx)),
+                                    .justify_between()
+                                    .child(
+                                        h_flex()
+                                            .gap_0p5()
+                                            .child(self.render_add_context_button(cx))
+                                            .child(self.render_follow_toggle(cx))
+                                            .children(self.render_fast_mode_control(cx))
+                                            .children(self.render_thinking_control(cx)),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .flex_wrap()
+                                            .gap_1()
+                                            .children(self.render_token_usage(cx))
+                                            .children(self.profile_selector.clone())
+                                            .map(|this| match self.config_options_view.clone() {
+                                                Some(config_view) => this.child(config_view),
+                                                None => this
+                                                    .children(self.mode_selector.clone())
+                                                    .children(self.model_selector.clone()),
+                                            })
+                                            .child(self.render_send_button(cx)),
+                                    ),
                             ),
                     ),
             )
             .into_any()
+    }
+
+    fn render_agent_greeting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let greeting = match Local::now().hour() {
+            5..=11 => "Good morning",
+            12..=17 => "Good afternoon",
+            _ => "Good evening",
+        };
+
+        v_flex()
+            .items_center()
+            .gap_1()
+            .py_4()
+            .child(
+                Icon::new(IconName::AiAuracle)
+                    .size(IconSize::XLarge)
+                    .color(Color::Accent),
+            )
+            .child(Label::new(greeting).size(LabelSize::Large))
+            .child(
+                Label::new("How can I help you trade today?")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(self.render_prompt_starters(cx))
+    }
+
+    fn render_prompt_starters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let starters = [
+            (
+                "starter-backtest",
+                "Backtest an idea",
+                "Help me write and backtest a mean-reversion strategy.",
+            ),
+            (
+                "starter-explain",
+                "Explain my results",
+                "Explain the walk-forward results from my last backtest.",
+            ),
+            (
+                "starter-ingest",
+                "Ingest data",
+                "Ingest daily bars for SPY since 2015.",
+            ),
+            (
+                "starter-improve",
+                "Make it robust",
+                "Suggest changes to make my strategy more robust to overfitting.",
+            ),
+        ];
+
+        h_flex()
+            .mt_2()
+            .flex_wrap()
+            .justify_center()
+            .gap_1p5()
+            .children(starters.map(|(id, label, prompt)| {
+                Button::new(id, label)
+                    .style(ButtonStyle::Outlined)
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.message_editor.update(cx, |editor, cx| {
+                            editor.clear(window, cx);
+                            editor.insert_text(prompt, window, cx);
+                        });
+                        this.message_editor.focus_handle(cx).focus(window, cx);
+                    }))
+            }))
     }
 
     fn render_message_queue_entries(
@@ -4965,12 +5062,14 @@ impl ThreadView {
                 IconName::Send
             };
             IconButton::new("send-message", send_icon)
-                .style(ButtonStyle::Filled)
                 .map(|this| {
                     if is_editor_empty && !is_generating {
-                        this.disabled(true).icon_color(Color::Muted)
+                        this.disabled(true)
+                            .style(ButtonStyle::Filled)
+                            .icon_color(Color::Muted)
                     } else {
-                        this.icon_color(Color::Accent)
+                        this.style(ButtonStyle::Tinted(TintColor::Accent))
+                            .icon_color(Color::Accent)
                     }
                 })
                 .tooltip(move |_window, cx| {
