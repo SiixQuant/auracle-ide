@@ -34,6 +34,9 @@ use ui::prelude::*;
 use workspace::Workspace;
 use workspace::dock::{DockPosition, Panel, PanelEvent};
 
+mod deploy_wizard;
+pub use deploy_wizard::{DeployWizardItem, OpenDeployWizard};
+
 actions!(
     auracle_live_ui,
     [
@@ -45,6 +48,7 @@ actions!(
 const POLL_EVERY: Duration = Duration::from_secs(20);
 
 pub fn init(cx: &mut App) {
+    deploy_wizard::init(cx);
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
             workspace.toggle_panel_focus::<LiveAlgorithmsPanel>(window, cx);
@@ -480,11 +484,23 @@ impl LiveAlgorithmsPanel {
 impl Render for LiveAlgorithmsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.algos.active_count();
-        let header = panel_header("LIVE ALGORITHMS", cx).child(
-            Label::new(SharedString::from(format!("· {active} live")))
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-        );
+        let header = panel_header("LIVE ALGORITHMS", cx)
+            .child(
+                Label::new(SharedString::from(format!("· {active} live")))
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("live-deploy", "Deploy")
+                    .style(ButtonStyle::Outlined)
+                    .label_size(LabelSize::XSmall)
+                    .size(ButtonSize::Compact)
+                    .tooltip(ui::Tooltip::text("Deploy a strategy"))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(OpenDeployWizard), cx);
+                    })),
+            );
 
         let labels = PlaceholderLabels::new(
             "live-connect",
