@@ -309,17 +309,22 @@ impl LiveAlgorithmsPanel {
         };
         let selected_bg = cx.theme().colors().element_selected;
 
-        let actions_row = available_actions(&deployment.state).into_iter().map(move |action| {
-            Button::new(
-                SharedString::from(format!("live-{}-{}", id, action.verb())),
-                action.label(),
-            )
-            .style(ButtonStyle::Subtle)
-            .label_size(LabelSize::XSmall)
-            .size(ButtonSize::Compact)
-            .when(action.is_destructive(), |b| b.color(Color::Error))
-            .on_click(cx.listener(move |this, _, _, cx| this.dispatch_action(id, action, cx)))
-        });
+        // Collect the action buttons first (non-move closure borrows cx by
+        // shared ref) so cx is free to use again for the row's own on_click.
+        let action_buttons: Vec<_> = available_actions(&deployment.state)
+            .into_iter()
+            .map(|action| {
+                Button::new(
+                    SharedString::from(format!("live-{}-{}", id, action.verb())),
+                    action.label(),
+                )
+                .style(ButtonStyle::Subtle)
+                .label_size(LabelSize::XSmall)
+                .size(ButtonSize::Compact)
+                .when(action.is_destructive(), |b| b.color(Color::Error))
+                .on_click(cx.listener(move |this, _, _, cx| this.dispatch_action(id, action, cx)))
+            })
+            .collect();
 
         v_flex()
             .id(SharedString::from(format!("live-row-{id}")))
@@ -369,7 +374,7 @@ impl LiveAlgorithmsPanel {
                     .child(div().flex_1())
                     .child(Label::new(return_text).size(LabelSize::XSmall).color(return_color)),
             )
-            .child(h_flex().w_full().gap_1().children(actions_row))
+            .child(h_flex().w_full().gap_1().children(action_buttons))
     }
 
     fn render_ledger(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -489,15 +494,25 @@ impl Render for LiveAlgorithmsPanel {
         let rows: Vec<_> = self.algos.rows.clone();
         let body: AnyElement = match placeholder_body(&self.status, rows.is_empty(), &labels) {
             Some(placeholder) => placeholder,
-            None => v_flex()
-                .id("live-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .p_1()
-                .gap_1()
-                .children(rows.iter().map(|d| self.render_row(d, cx)))
-                .child(self.render_ledger(cx))
-                .into_any_element(),
+            None => {
+                // Collect rows + ledger as concrete elements first so each
+                // mutable cx borrow ends before the next (avoids overlapping
+                // borrows of cx across the row map and the ledger build).
+                let row_els: Vec<AnyElement> = rows
+                    .iter()
+                    .map(|d| self.render_row(d, cx).into_any_element())
+                    .collect();
+                let ledger = self.render_ledger(cx);
+                v_flex()
+                    .id("live-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .p_1()
+                    .gap_1()
+                    .children(row_els)
+                    .child(ledger)
+                    .into_any_element()
+            }
         };
 
         v_flex()
