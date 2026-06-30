@@ -364,6 +364,28 @@ impl Render for TitleBar {
                 .child(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
+                // Always-present Auracle Settings entry. Zed's native account
+                // menu (which also held Settings) is gated off by the
+                // white-label (`show_user_menu=false`) because it opens
+                // zed.dev with Zed's collab identity — so the top-right was
+                // left with no Settings affordance at all. This opens the
+                // Auracle settings home (the connections/AI panel) instead.
+                .child(
+                    IconButton::new("auracle-settings", IconName::Settings)
+                        .tooltip(move |_window, cx| {
+                            Tooltip::for_action(
+                                "Settings",
+                                &auracle_onboarding::OpenConnections,
+                                cx,
+                            )
+                        })
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(
+                                auracle_onboarding::OpenConnections.boxed_clone(),
+                                cx,
+                            );
+                        }),
+                )
                 .when(
                     user.is_none()
                         && is_signed_out_or_auth_error
