@@ -12,8 +12,6 @@
 //! POSTs `to_request()` to `/ui/api/deploy/live` and reports the outcome; the
 //! new deployment then appears in the Live Algorithms panel.
 
-use std::sync::Arc;
-
 use auracle_live::{Compute, DeployWizard, Mode};
 use editor::Editor;
 use gpui::{
@@ -115,7 +113,10 @@ impl DeployWizardItem {
         selected: bool,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
+        // Returns a concrete AnyElement (not `impl IntoElement`) so the element
+        // doesn't capture the `cx` / `&str` input lifetimes — otherwise it
+        // can't escape a `.map` closure (the brokerage row builds pills in one).
         Button::new(SharedString::from(id.to_string()), label.to_string())
             .style(if selected {
                 ButtonStyle::Filled
@@ -127,6 +128,7 @@ impl DeployWizardItem {
                 on_click(this, window, cx);
                 cx.notify();
             }))
+            .into_any_element()
     }
 
     fn section(&self, title: &str, body: impl IntoElement) -> impl IntoElement {
