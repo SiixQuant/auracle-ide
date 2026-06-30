@@ -265,6 +265,15 @@ impl ApiKey {
             Ok(key) => key,
             Err(_) => return LoadStatus::Error(format!("API key for URL {url} is not utf8")),
         };
+        // A blank keychain entry (empty or whitespace-only) is not a usable
+        // credential — it can linger from a cleared-but-persisted entry or a
+        // failed provisioning write. Treat it as absent (mirrors the env-var
+        // path's `!is_empty` guard) so the provider prompts the user to
+        // configure a key, rather than sending the blank value upstream and
+        // surfacing a confusing "401 Invalid authentication credentials".
+        if key.trim().is_empty() {
+            return LoadStatus::NotPresent;
+        }
         LoadStatus::Loaded(Self {
             source: ApiKeySource::SystemKeychain,
             key: key.into(),
