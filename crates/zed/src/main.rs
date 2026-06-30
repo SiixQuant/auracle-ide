@@ -748,6 +748,15 @@ fn main() {
         incidents_panel::init(cx);
         blotter_panel::init(cx);
         validation_rail::init(cx);
+        // Keep this Auracle init list in sync with the test init in zed.rs
+        // (`init_test*`): the two have silently drifted before, shipping
+        // features dead. These three were registered only in the test init,
+        // so the agent money-path commands (RunBacktest, WalkForward,
+        // RunPreflight, IngestData, …) and the strategies/schedules focus
+        // actions never reached the production command palette.
+        strategies_panel::init(cx);
+        schedules_panel::init(cx);
+        auracle_agent_commands::init(cx);
         auracle_connect::init(cx);
         auracle_connections::init(cx);
         auracle_onboarding::init(cx);

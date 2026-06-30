@@ -5568,6 +5568,10 @@ mod tests {
             schedules_panel::init(cx);
             auracle_agent_commands::init(cx);
             auracle_connect::init(cx);
+            // Mirror main.rs: register the connections panel here too so the
+            // test harness exercises it and this list can't drift again.
+            auracle_connections::init(cx);
+            auracle_onboarding::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
             copilot_chat::init(
