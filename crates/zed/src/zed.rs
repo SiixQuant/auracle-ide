@@ -742,6 +742,8 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let runs_dock = runs_dock::RunsDock::load(workspace_handle.clone(), cx.clone());
         let incidents_panel = incidents_panel::IncidentsPanel::load(workspace_handle.clone(), cx.clone());
         let blotter_panel = blotter_panel::BlotterPanel::load(workspace_handle.clone(), cx.clone());
+        let live_panel =
+            auracle_live_ui::LiveAlgorithmsPanel::load(workspace_handle.clone(), cx.clone());
         let settings_panel =
             auracle_onboarding::AuracleSettingsPanel::load(workspace_handle.clone(), cx.clone());
         let validation_rail = validation_rail::ValidationRail::load(workspace_handle.clone(), cx.clone());
@@ -778,6 +780,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(runs_dock, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(incidents_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(blotter_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(live_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(settings_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(validation_rail, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(strategies_panel, workspace_handle.clone(), cx.clone()),
@@ -5571,6 +5574,7 @@ mod tests {
             // Mirror main.rs: register the connections panel here too so the
             // test harness exercises it and this list can't drift again.
             auracle_connections::init(cx);
+            auracle_live_ui::init(cx);
             auracle_onboarding::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);

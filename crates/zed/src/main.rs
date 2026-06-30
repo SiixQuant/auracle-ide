@@ -759,6 +759,7 @@ fn main() {
         auracle_agent_commands::init(cx);
         auracle_connect::init(cx);
         auracle_connections::init(cx);
+        auracle_live_ui::init(cx);
         auracle_onboarding::init(cx);
         outline_panel::init(cx);
         tasks_ui::init(cx);

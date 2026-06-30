@@ -171,6 +171,7 @@ project_panel.workspace = true
 auracle_agent_commands.workspace = true
 auracle_connect.workspace = true
 auracle_connections.workspace = true
+auracle_live_ui.workspace = true
 auracle_onboarding.workspace = true
 auracle_status.workspace = true
 blotter_panel.workspace = true
