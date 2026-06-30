@@ -29,8 +29,8 @@ use command_palette_hooks::CommandPaletteFilter;
 use gpui::{
     Action, Anchor, Animation, AnimationExt, AnyElement, App, Context, Element, Entity, Focusable,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, TaskExt, WeakEntity, Window, actions, div,
-    pulsating_between,
+    StatefulInteractiveElement, Styled, Subscription, Task, TaskExt, WeakEntity, Window, actions,
+    div, pulsating_between,
 };
 use onboarding_banner::OnboardingBanner;
 use project::{
@@ -207,6 +207,11 @@ pub struct TitleBar {
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
     _diagnostics_subscription: Option<gpui::Subscription>,
+    /// The signed-in operator's account (email + tier) as the engine reports it
+    /// over loopback. None until the first fetch resolves, or when no account is
+    /// configured — the chip then renders nothing, never a fabricated identity.
+    account: Option<auracle_connections::Account>,
+    _account_fetch: Task<()>,
 }
 
 impl Render for TitleBar {
@@ -364,6 +369,10 @@ impl Render for TitleBar {
                 .child(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
+                // The signed-in account chip (email + tier) — the profile
+                // indicator. Reflects Auracle's own identity from the engine,
+                // not Zed's collab account; renders nothing when no account.
+                .children(self.render_account_chip(cx))
                 // Always-present Auracle Settings entry. Zed's native account
                 // menu (which also held Settings) is gated off by the
                 // white-label (`show_user_menu=false`) because it opens
@@ -538,11 +547,62 @@ impl TitleBar {
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
             _diagnostics_subscription: None,
+            account: None,
+            _account_fetch: Task::ready(()),
         };
 
         this.observe_diagnostics(cx);
+        this._account_fetch = Self::fetch_account(cx);
 
         this
+    }
+
+    /// Fetch the signed-in operator's account (email + tier) over loopback and
+    /// fold it into `account`. A missing key, an unreachable engine, or an empty
+    /// account all resolve to None, so the chip simply disappears — never a
+    /// fabricated identity.
+    fn fetch_account(cx: &mut Context<Self>) -> Task<()> {
+        let http = cx.http_client();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let account = auracle_connections::get_account(http)
+                .await
+                .ok()
+                .filter(|a| !a.email.trim().is_empty());
+            this.update(cx, |this, cx| {
+                this.account = account;
+                cx.notify();
+            })
+            .ok();
+        })
+    }
+
+    /// The signed-in account chip shown left of the Settings gear: the operator's
+    /// email, with the tier in the tooltip. Renders nothing when no account is
+    /// configured. Clicking opens the Auracle settings panel.
+    fn render_account_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let account = self.account.clone()?;
+        let tooltip = if account.tier.trim().is_empty() {
+            format!("Signed in as {}", account.email)
+        } else {
+            format!("Signed in as {} · {}", account.email, account.tier)
+        };
+        Some(
+            div()
+                .id("auracle-account")
+                .cursor_pointer()
+                .child(
+                    Label::new(account.email.clone())
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .tooltip(Tooltip::text(tooltip))
+                .on_click(cx.listener(|_, _, window, cx| {
+                    window.dispatch_action(
+                        auracle_onboarding::OpenConnections.boxed_clone(),
+                        cx,
+                    );
+                })),
+        )
     }
 
     fn worktree_count(&self, cx: &App) -> usize {
