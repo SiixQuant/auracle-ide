@@ -1,0 +1,22 @@
+[package]
+name = "auracle_live"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/auracle_live.rs"
+
+# Deliberately gpui-free: the pure ViewState seam for Live Deploy. The GPUI
+# panel layers on top; this crate stays unit-testable with `cargo test` on a
+# machine with no Xcode (gpui can't build there).
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
