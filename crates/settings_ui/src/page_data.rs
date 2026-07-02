@@ -98,6 +98,11 @@ fn connections_page() -> SettingsPage {
     SettingsPage {
         title: "Connections",
         items: vec![
+            SettingsPageItem::SectionHeader("Engine"),
+            SettingsPageItem::CustomSection(CustomSection {
+                title: "Engine connection",
+                render: crate::pages::render_auracle_engine,
+            }),
             SettingsPageItem::SectionHeader("Brokers"),
             SettingsPageItem::CustomSection(CustomSection {
                 title: "Broker connections",

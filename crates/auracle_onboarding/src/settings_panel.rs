@@ -69,6 +69,7 @@ pub fn init(_cx: &mut App) {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Section {
     Account,
+    Engine,
     Broker,
     Data,
     QuantConnect,
@@ -81,6 +82,7 @@ impl Section {
     fn key(self) -> &'static str {
         match self {
             Section::Account => "sec-account",
+            Section::Engine => "sec-engine",
             Section::Broker => "sec-broker",
             Section::Data => "sec-data",
             Section::QuantConnect => "sec-qc",
@@ -92,6 +94,7 @@ impl Section {
     fn title(self) -> &'static str {
         match self {
             Section::Account => "Account",
+            Section::Engine => "Engine",
             Section::Broker => "Broker",
             Section::Data => "Data sources",
             Section::QuantConnect => "QuantConnect",
@@ -100,8 +103,9 @@ impl Section {
         }
     }
 
-    const ALL: [Section; 6] = [
+    const ALL: [Section; 7] = [
         Section::Account,
+        Section::Engine,
         Section::Broker,
         Section::Data,
         Section::QuantConnect,
@@ -116,6 +120,12 @@ enum TestState {
     Idle,
     Working,
     Verdict { ok: bool, plain: SharedString },
+}
+
+/// The engine-reachability truth shown at the top of the Connections page.
+struct EngineInfo {
+    reachable: bool,
+    version: String,
 }
 
 enum GitHubAuthState {
@@ -141,6 +151,7 @@ enum ModelStatus {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EmbedScope {
     Account,
+    Engine,
     Brokers,
     Data,
     Integrations,
@@ -152,6 +163,7 @@ impl EmbedScope {
     pub fn key(self) -> &'static str {
         match self {
             EmbedScope::Account => "embed-account",
+            EmbedScope::Engine => "embed-engine",
             EmbedScope::Brokers => "embed-brokers",
             EmbedScope::Data => "embed-data",
             EmbedScope::Integrations => "embed-integrations",
@@ -163,6 +175,7 @@ impl EmbedScope {
     fn section(self) -> Section {
         match self {
             EmbedScope::Account => Section::Account,
+            EmbedScope::Engine => Section::Engine,
             EmbedScope::Brokers => Section::Broker,
             EmbedScope::Data => Section::Data,
             EmbedScope::Integrations => Section::QuantConnect,
@@ -189,6 +202,8 @@ pub struct AuracleSettingsPanel {
     brokers: Vec<Connector>,
     data_providers: Vec<Connector>,
     integrations: Vec<Connector>,
+    /// `None` until the first status round-trip resolves.
+    engine_info: Option<EngineInfo>,
 
     // Active connector detail (the master-detail "detail" pane). The section
     // disambiguates connectors that share an id across kinds (e.g. Alpaca).
@@ -293,6 +308,7 @@ impl AuracleSettingsPanel {
             brokers: Vec::new(),
             data_providers: Vec::new(),
             integrations: Vec::new(),
+            engine_info: None,
             selected_connector: None,
             fields: Vec::new(),
             fields_loaded: false,
@@ -403,10 +419,25 @@ impl AuracleSettingsPanel {
             let data = auracle_connections::list_connectors(http.clone(), "data_provider")
                 .await
                 .unwrap_or_default();
-            let integrations = auracle_connections::list_connectors(http, "integration")
+            let integrations = auracle_connections::list_connectors(http.clone(), "integration")
                 .await
                 .unwrap_or_default();
+            let engine_status = auracle_connections::get_json(http, "/ui/api/status").await;
             this.update(cx, |this, cx| {
+                this.engine_info = Some(match &engine_status {
+                    Ok(value) => EngineInfo {
+                        reachable: true,
+                        version: value
+                            .get("version")
+                            .and_then(|version| version.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                    Err(_) => EngineInfo {
+                        reachable: false,
+                        version: String::new(),
+                    },
+                });
                 this.brokers = brokers;
                 this.data_providers = data;
                 this.integrations = integrations;
@@ -581,6 +612,12 @@ impl AuracleSettingsPanel {
         let Some(connector) = self.active_connector_id() else {
             return;
         };
+        self.disconnect_connector_by_id(connector, cx);
+    }
+
+    /// Disconnect a specific connector without opening its detail — the list
+    /// rows offer this directly.
+    fn disconnect_connector_by_id(&mut self, connector: String, cx: &mut Context<Self>) {
         let http = cx.http_client();
         self.test_state = TestState::Working;
         cx.notify();
@@ -984,6 +1021,11 @@ impl AuracleSettingsPanel {
                     (format!("{tier} · {email}"), Color::Muted)
                 }
             },
+            Section::Engine => match &self.engine_info {
+                None => ("Checking…".into(), Color::Muted),
+                Some(info) if info.reachable => ("Connected".into(), Color::Success),
+                Some(_) => ("Unreachable".into(), Color::Error),
+            },
             Section::Broker => connector_summary_line(&self.brokers),
             Section::Data => connector_summary_line(&self.data_providers),
             Section::QuantConnect => connector_summary_line(&self.integrations),
@@ -1005,6 +1047,7 @@ impl AuracleSettingsPanel {
     fn render_section_body(&self, section: Section, cx: &mut Context<Self>) -> AnyElement {
         match section {
             Section::Account => self.render_account(cx),
+            Section::Engine => self.render_engine(),
             Section::Broker | Section::Data | Section::QuantConnect => {
                 self.render_connector_section(section, cx)
             }
@@ -1013,13 +1056,8 @@ impl AuracleSettingsPanel {
         }
     }
 
-    fn render_account(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(account) = &self.account else {
-            return Label::new("Reading your account from the engine…")
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .into_any_element();
-        };
+    fn render_engine(&self) -> AnyElement {
+        let url = auracle_connections::engine_display_url();
         let row = |label: &str, value: String, value_color: Color| {
             h_flex()
                 .justify_between()
@@ -1030,6 +1068,40 @@ impl AuracleSettingsPanel {
                         .color(Color::Muted),
                 )
                 .child(Label::new(value).size(LabelSize::Small).color(value_color))
+        };
+        let mut body = v_flex().gap_2().child(row("Engine", url, Color::Default));
+        match &self.engine_info {
+            None => {
+                body = body.child(row("Status", "Checking…".to_string(), Color::Muted));
+            }
+            Some(info) if info.reachable => {
+                body = body.child(row("Status", "Connected".to_string(), Color::Success));
+                if !info.version.is_empty() {
+                    body = body.child(row("Version", info.version.clone(), Color::Default));
+                }
+            }
+            Some(_) => {
+                body = body
+                    .child(row("Status", "Unreachable".to_string(), Color::Error))
+                    .child(
+                        Label::new(
+                            "Start Auracle from the launcher — every connection below \
+                             rides this engine session.",
+                        )
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                    );
+            }
+        }
+        body.into_any_element()
+    }
+
+    fn render_account(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(account) = &self.account else {
+            return Label::new("Reading your account from the engine…")
+                .size(LabelSize::Small)
+                .color(Color::Muted)
+                .into_any_element();
         };
         let tier = if account.tier.is_empty() {
             "—".to_string()
@@ -1052,11 +1124,56 @@ impl AuracleSettingsPanel {
             _ => ("No active license".to_string(), Color::Warning),
         };
 
-        let mut body = v_flex()
-            .gap_2()
-            .child(row("Email", email, Color::Default))
-            .child(row("Plan", tier, Color::Default))
-            .child(row("License", license_text, license_color));
+        let border = cx.theme().colors().border;
+        let chip_background = cx.theme().colors().ghost_element_background;
+        let tile_background = cx.theme().colors().element_selected;
+        let initial = email
+            .chars()
+            .next()
+            .map(|letter| letter.to_ascii_uppercase())
+            .unwrap_or('•');
+        let chip = |text: String, color: Color| {
+            h_flex()
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .border_1()
+                .border_color(border)
+                .bg(chip_background)
+                .child(Label::new(text).size(LabelSize::Small).color(color))
+        };
+        let plan_chip = chip(
+            if tier == "—" {
+                "No plan".to_string()
+            } else {
+                format!("{tier} plan")
+            },
+            Color::Default,
+        );
+        let license_chip = chip(license_text, license_color);
+
+        let mut body = v_flex().gap_3().child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .size_8()
+                        .flex_none()
+                        .rounded_full()
+                        .bg(tile_background)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Label::new(initial.to_string())),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new(email))
+                        .child(h_flex().gap_2().child(plan_chip).child(license_chip)),
+                ),
+        );
 
         if let Some(url) = account.manage_url.clone() {
             body = body.child(
@@ -1115,10 +1232,13 @@ impl AuracleSettingsPanel {
             let gated = connector.gated;
             let blurb = connector.blurb.clone();
             let has_logo = broker_logo_path(&connector.id).is_some();
+            let keyless = matches!(id.as_str(), "yfinance" | "simulator");
             let (status_text, status_color) = if gated {
                 ("Upgrade to use", Color::Warning)
             } else if connected {
                 ("Connected", Color::Success)
+            } else if keyless {
+                ("Ready — no key needed", Color::Success)
             } else {
                 ("Not connected", Color::Muted)
             };
@@ -1150,15 +1270,48 @@ impl AuracleSettingsPanel {
                                 column.child(
                                     Label::new(blurb.clone())
                                         .size(LabelSize::Small)
-                                        .color(Color::Muted),
+                                        .color(Color::Muted)
+                                        .truncate(),
                                 )
                             }),
                     )
+                    .when(connected && !gated, |row| {
+                        let disconnect_id = id.clone();
+                        row.child(
+                            Button::new(
+                                SharedString::from(format!("dc-{}-{}", section.key(), id)),
+                                "Disconnect",
+                            )
+                            .style(ButtonStyle::Subtle)
+                            .label_size(LabelSize::Small)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.disconnect_connector_by_id(disconnect_id.clone(), cx);
+                                },
+                            )),
+                        )
+                    })
                     .child(
                         Label::new(status_text)
                             .size(LabelSize::Small)
                             .color(status_color),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronRight)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
                     ),
+            );
+        }
+        if section == Section::Data {
+            list = list.child(
+                Label::new(
+                    "Deployments read from the first listed source that can serve \
+                     them — sources never stream in parallel.",
+                )
+                .size(LabelSize::Small)
+                .color(Color::Muted),
             );
         }
         list.into_any_element()

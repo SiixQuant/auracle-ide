@@ -11,7 +11,8 @@ pub(crate) use audio_input_output_setup::{
 };
 pub(crate) use auracle_settings::{
     render_auracle_account, render_auracle_ai_model, render_auracle_brokers,
-    render_auracle_data_sources, render_auracle_github, render_auracle_integrations,
+    render_auracle_data_sources, render_auracle_engine, render_auracle_github,
+    render_auracle_integrations,
 };
 pub(crate) use edit_prediction_provider_setup::render_edit_prediction_setup_page;
 pub(crate) use feature_flags::render_feature_flags_page;

@@ -44,6 +44,14 @@ pub(crate) fn render_auracle_account(
     render_embedded(EmbedScope::Account, settings_window, window, cx)
 }
 
+pub(crate) fn render_auracle_engine(
+    settings_window: &SettingsWindow,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    render_embedded(EmbedScope::Engine, settings_window, window, cx)
+}
+
 pub(crate) fn render_auracle_brokers(
     settings_window: &SettingsWindow,
     window: &mut Window,
