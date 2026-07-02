@@ -18,6 +18,7 @@ test-support = []
 [dependencies]
 agent.workspace = true
 auracle_connections.workspace = true
+auracle_onboarding.workspace = true
 agent_settings.workspace = true
 agent_skills.workspace = true
 anyhow.workspace = true

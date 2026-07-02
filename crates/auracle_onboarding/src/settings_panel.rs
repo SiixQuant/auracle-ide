@@ -54,22 +54,11 @@ actions!(
     ]
 );
 
-pub fn init(cx: &mut App) {
-    cx.observe_new(|workspace: &mut Workspace, _, _| {
-        // Both the settings deep-link (`OpenConnections`) and the deploy /
-        // legacy connect path (`OpenBrokerWizard`, kept for back-compat after
-        // the modal's retirement) focus the one docked panel — there is no
-        // separate wizard surface anymore.
-        workspace.register_action(|workspace, _: &OpenConnections, window, cx| {
-            workspace.focus_panel::<AuracleSettingsPanel>(window, cx);
-        });
-        workspace.register_action(
-            |workspace, _: &auracle_connections::OpenBrokerWizard, window, cx| {
-                workspace.focus_panel::<AuracleSettingsPanel>(window, cx);
-            },
-        );
-    })
-    .detach();
+pub fn init(_cx: &mut App) {
+    // `OpenConnections` / `OpenBrokerWizard` are handled by `settings_ui`,
+    // which opens the native settings window at the Connections page. The
+    // handlers can't live here: settings_ui depends on this crate to embed
+    // the section bodies, so registering them here would be a dep cycle.
 }
 
 // ── Sections ──────────────────────────────────────────────────────────
@@ -145,9 +134,50 @@ enum ModelStatus {
     },
 }
 
+/// One panel section hosted inside the native settings window. Each native
+/// page embeds its own panel instance scoped to a single section, so the
+/// window gets native section headers while this crate keeps owning the
+/// engine-backed bodies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EmbedScope {
+    Account,
+    Brokers,
+    Data,
+    Integrations,
+    AiModel,
+    GitHub,
+}
+
+impl EmbedScope {
+    pub fn key(self) -> &'static str {
+        match self {
+            EmbedScope::Account => "embed-account",
+            EmbedScope::Brokers => "embed-brokers",
+            EmbedScope::Data => "embed-data",
+            EmbedScope::Integrations => "embed-integrations",
+            EmbedScope::AiModel => "embed-ai",
+            EmbedScope::GitHub => "embed-github",
+        }
+    }
+
+    fn section(self) -> Section {
+        match self {
+            EmbedScope::Account => Section::Account,
+            EmbedScope::Brokers => Section::Broker,
+            EmbedScope::Data => Section::Data,
+            EmbedScope::Integrations => Section::QuantConnect,
+            EmbedScope::AiModel => Section::AiModel,
+            EmbedScope::GitHub => Section::GitHub,
+        }
+    }
+}
+
 pub struct AuracleSettingsPanel {
     focus_handle: FocusHandle,
-    workspace: WeakEntity<Workspace>,
+    workspace: Option<WeakEntity<Workspace>>,
+    /// `Some` when this instance renders exactly one section body inside the
+    /// native settings window; `None` for the legacy docked panel rendering.
+    scope: Option<EmbedScope>,
 
     // Section disclosure
     expanded: HashSet<Section>,
@@ -215,66 +245,86 @@ impl AuracleSettingsPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |workspace, window, cx| {
             let weak = workspace.weak_handle();
-            cx.new(|cx| {
-                // Reconnecting (a new saved connection, anywhere) reloads the
-                // connectors, the account, and the shared truths, and re-runs
-                // the AI-key import — mirrors how the blotter reloads on a
-                // ConnectGeneration bump.
-                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
-                    this.load_connectors(cx);
-                    this.load_account(cx);
-                    this.load_shared_and_import(cx);
-                })
-                .detach();
-
-                let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
-                for _ in 0..auracle_connections::MAX_FIELDS {
-                    editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
-                }
-                let mut this = Self {
-                    focus_handle: cx.focus_handle(),
-                    workspace: weak,
-                    // Account + Broker open by default; the first connector load
-                    // opens any other section that needs attention.
-                    expanded: HashSet::from([Section::Account, Section::Broker]),
-                    did_auto_expand: false,
-                    brokers: Vec::new(),
-                    data_providers: Vec::new(),
-                    integrations: Vec::new(),
-                    selected_connector: None,
-                    fields: Vec::new(),
-                    fields_loaded: false,
-                    editors,
-                    selections: std::collections::HashMap::new(),
-                    capability: None,
-                    connector_saved: false,
-                    test_state: TestState::Idle,
-                    account: None,
-                    provider_view: None,
-                    model_id_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    model_status: ModelStatus::Idle,
-                    git_name_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    git_email_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    git_identity_saved: false,
-                    github_state: GitHubAuthState::Unknown,
-                    shared: None,
-                    _connector_task: None,
-                    _account_task: None,
-                    _shared_task: None,
-                    _github_task: None,
-                    _mirror_task: None,
-                };
-                this.load_connectors(cx);
-                this.load_account(cx);
-                this.load_shared_and_import(cx);
-                this.check_github(cx);
-                this
-            })
+            cx.new(|cx| Self::construct(Some(weak), None, window, cx))
         })
     }
 
+    /// A single-section instance for the native settings window. `workspace`
+    /// is best-effort (derived from the settings window's originating
+    /// workspace when available) — only the git-identity save needs it.
+    pub fn embedded(
+        scope: EmbedScope,
+        workspace: Option<WeakEntity<Workspace>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::construct(workspace, Some(scope), window, cx)
+    }
+
+    fn construct(
+        workspace: Option<WeakEntity<Workspace>>,
+        scope: Option<EmbedScope>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Reconnecting (a new saved connection, anywhere) reloads the
+        // connectors, the account, and the shared truths, and re-runs
+        // the AI-key import — mirrors how the blotter reloads on a
+        // ConnectGeneration bump.
+        cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+            this.load_connectors(cx);
+            this.load_account(cx);
+            this.load_shared_and_import(cx);
+        })
+        .detach();
+
+        let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
+        for _ in 0..auracle_connections::MAX_FIELDS {
+            editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
+        }
+        let mut this = Self {
+            focus_handle: cx.focus_handle(),
+            workspace,
+            scope,
+            // Account + Broker open by default; the first connector load
+            // opens any other section that needs attention.
+            expanded: HashSet::from([Section::Account, Section::Broker]),
+            did_auto_expand: false,
+            brokers: Vec::new(),
+            data_providers: Vec::new(),
+            integrations: Vec::new(),
+            selected_connector: None,
+            fields: Vec::new(),
+            fields_loaded: false,
+            editors,
+            selections: std::collections::HashMap::new(),
+            capability: None,
+            connector_saved: false,
+            test_state: TestState::Idle,
+            account: None,
+            provider_view: None,
+            model_id_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            model_status: ModelStatus::Idle,
+            git_name_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            git_email_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            git_identity_saved: false,
+            github_state: GitHubAuthState::Unknown,
+            shared: None,
+            _connector_task: None,
+            _account_task: None,
+            _shared_task: None,
+            _github_task: None,
+            _mirror_task: None,
+        };
+        this.load_connectors(cx);
+        this.load_account(cx);
+        this.load_shared_and_import(cx);
+        this.check_github(cx);
+        this
+    }
+
     fn fs(&self, cx: &App) -> Option<Arc<dyn fs::Fs>> {
-        let workspace = self.workspace.upgrade()?;
+        let workspace = self.workspace.as_ref()?.upgrade()?;
         Some(workspace.read(cx).project().read(cx).fs().clone())
     }
 
@@ -1498,6 +1548,17 @@ fn connector_summary_line(connectors: &[Connector]) -> (String, Color) {
 
 impl Render for AuracleSettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Embedded in the native settings window: exactly one section body,
+        // always open — the window supplies the page/section chrome.
+        if let Some(scope) = self.scope {
+            return v_flex()
+                .id(scope.key())
+                .w_full()
+                .gap_3()
+                .child(self.render_section_body(scope.section(), cx))
+                .into_any_element();
+        }
+
         let mut column = v_flex()
             .id("auracle-settings-panel")
             .key_context("AuracleSettingsPanel")
@@ -1511,6 +1572,6 @@ impl Render for AuracleSettingsPanel {
         for section in Section::ALL {
             column = column.child(self.render_section(section, cx));
         }
-        column
+        column.into_any_element()
     }
 }
