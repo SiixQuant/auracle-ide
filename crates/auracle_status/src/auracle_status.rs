@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use futures::AsyncReadExt as _;
 use gpui::{App, Entity, EventEmitter, Hsla, SharedString, Task, Window};
 use ui::Tooltip;
 use ui::prelude::*;
@@ -76,24 +75,15 @@ impl AuracleStatus {
 
 async fn poll_once(http: Arc<dyn http_client::HttpClient>) -> EngineState {
     let config = auracle_connect::load_config();
-    let Some(key) = config.api_key.filter(|k| !k.trim().is_empty()) else {
+    if config
+        .api_key
+        .filter(|key| !key.trim().is_empty())
+        .is_none()
+    {
         return EngineState::NotConnected;
-    };
-    let url = config
-        .engine_url
-        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
+    }
     let attempt: Result<EngineState> = async {
-        let request = http_client::http::Request::builder()
-            .uri(format!("{url}/ui/api/capabilities"))
-            .header("Cookie", format!("auracle_session={key}"))
-            .body(http_client::AsyncBody::default())?;
-        let mut response = http.send(request).await?;
-        if !response.status().is_success() {
-            anyhow::bail!("status {}", response.status());
-        }
-        let mut body = String::new();
-        response.body_mut().read_to_string(&mut body).await?;
-        let value: serde_json::Value = serde_json::from_str(&body)?;
+        let value = auracle_connections::get_json(http, "/ui/api/capabilities").await?;
         let active = value.get("active_broker").and_then(|v| v.as_str());
         let broker = active.unwrap_or("none yet").to_string();
         let live_allowed = value

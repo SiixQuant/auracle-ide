@@ -1465,6 +1465,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auracle_connect",
+ "auracle_connections",
  "auracle_panel_common",
  "futures 0.3.32",
  "gpui",
