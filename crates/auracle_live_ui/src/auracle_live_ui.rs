@@ -195,7 +195,10 @@ enum FetchResult {
     Ok(Vec<auracle_live::Deployment>),
 }
 
-async fn engine_get(http: Arc<dyn http_client::HttpClient>, path: &str) -> Result<serde_json::Value> {
+async fn engine_get(
+    http: Arc<dyn http_client::HttpClient>,
+    path: &str,
+) -> Result<serde_json::Value> {
     let config = auracle_connect::load_config();
     let key = config
         .api_key
@@ -356,13 +359,15 @@ impl LiveAlgorithmsPanel {
                     )
                     .child(div().flex_1())
                     .child(
-                        Label::new(SharedString::from(state_label(&deployment.state).to_string()))
-                            .size(LabelSize::XSmall)
-                            .color(if is_active(&deployment.state) {
-                                Color::Default
-                            } else {
-                                Color::Muted
-                            }),
+                        Label::new(SharedString::from(
+                            state_label(&deployment.state).to_string(),
+                        ))
+                        .size(LabelSize::XSmall)
+                        .color(if is_active(&deployment.state) {
+                            Color::Default
+                        } else {
+                            Color::Muted
+                        }),
                     ),
             )
             .child(
@@ -376,7 +381,11 @@ impl LiveAlgorithmsPanel {
                             .color(Color::Muted),
                     )
                     .child(div().flex_1())
-                    .child(Label::new(return_text).size(LabelSize::XSmall).color(return_color)),
+                    .child(
+                        Label::new(return_text)
+                            .size(LabelSize::XSmall)
+                            .color(return_color),
+                    ),
             )
             .child(h_flex().w_full().gap_1().children(action_buttons))
     }
@@ -540,7 +549,9 @@ impl Render for LiveAlgorithmsPanel {
             .when_some(self.last_error.clone(), |this, error| {
                 this.child(
                     div().px_2().py_1().child(
-                        Label::new(error).size(LabelSize::XSmall).color(Color::Error),
+                        Label::new(error)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Error),
                     ),
                 )
             })

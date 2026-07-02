@@ -14,9 +14,7 @@
 
 use auracle_live::{Compute, DeployWizard, Mode};
 use editor::Editor;
-use gpui::{
-    App, Entity, EventEmitter, FocusHandle, Focusable, Task, WeakEntity, Window, actions,
-};
+use gpui::{App, Entity, EventEmitter, FocusHandle, Focusable, Task, WeakEntity, Window, actions};
 use ui::prelude::*;
 use workspace::Workspace;
 use workspace::item::Item;
@@ -135,7 +133,11 @@ impl DeployWizardItem {
         v_flex()
             .w_full()
             .gap_1p5()
-            .child(Label::new(title.to_string()).size(LabelSize::Small).color(Color::Muted))
+            .child(
+                Label::new(title.to_string())
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
             .child(body)
     }
 }
@@ -172,30 +174,64 @@ impl Render for DeployWizardItem {
         let mode = self.wizard.mode;
         let mode_row = h_flex()
             .gap_1()
-            .child(self.pill("mode-paper", "Paper", mode == Mode::Paper, |t, _, _| t.wizard.mode = Mode::Paper, cx))
-            .child(self.pill("mode-live", "Live", mode == Mode::Live, |t, _, _| t.wizard.mode = Mode::Live, cx));
+            .child(self.pill(
+                "mode-paper",
+                "Paper",
+                mode == Mode::Paper,
+                |t, _, _| t.wizard.mode = Mode::Paper,
+                cx,
+            ))
+            .child(self.pill(
+                "mode-live",
+                "Live",
+                mode == Mode::Live,
+                |t, _, _| t.wizard.mode = Mode::Live,
+                cx,
+            ));
 
         // Brokerage
         let selected_broker = self.wizard.broker.clone();
-        let broker_row = h_flex().gap_1().flex_wrap().children(BROKERS.iter().map(|(id, label)| {
-            let bid = id.to_string();
-            let is_sel = selected_broker.as_deref() == Some(*id);
-            self.pill(
-                &format!("broker-{id}"),
-                label,
-                is_sel,
-                move |t, _, _| t.wizard.broker = Some(bid.clone()),
-                cx,
-            )
-        }));
+        let broker_row =
+            h_flex()
+                .gap_1()
+                .flex_wrap()
+                .children(BROKERS.iter().map(|(id, label)| {
+                    let bid = id.to_string();
+                    let is_sel = selected_broker.as_deref() == Some(*id);
+                    self.pill(
+                        &format!("broker-{id}"),
+                        label,
+                        is_sel,
+                        move |t, _, _| t.wizard.broker = Some(bid.clone()),
+                        cx,
+                    )
+                }));
 
         // Compute
         let compute = self.wizard.compute;
         let compute_row = h_flex()
             .gap_1()
-            .child(self.pill("compute-local", "This machine", compute == Compute::Local, |t, _, _| t.wizard.compute = Compute::Local, cx))
-            .child(self.pill("compute-oci", "Oracle Cloud", compute == Compute::Oci, |t, _, _| t.wizard.compute = Compute::Oci, cx))
-            .child(self.pill("compute-aws", "AWS", compute == Compute::Aws, |t, _, _| t.wizard.compute = Compute::Aws, cx));
+            .child(self.pill(
+                "compute-local",
+                "This machine",
+                compute == Compute::Local,
+                |t, _, _| t.wizard.compute = Compute::Local,
+                cx,
+            ))
+            .child(self.pill(
+                "compute-oci",
+                "Oracle Cloud",
+                compute == Compute::Oci,
+                |t, _, _| t.wizard.compute = Compute::Oci,
+                cx,
+            ))
+            .child(self.pill(
+                "compute-aws",
+                "AWS",
+                compute == Compute::Aws,
+                |t, _, _| t.wizard.compute = Compute::Aws,
+                cx,
+            ));
 
         let auto_restart = self.wizard.auto_restart;
 
@@ -229,29 +265,33 @@ impl Render for DeployWizardItem {
                 field(self.aum_editor.clone().into_any_element()),
             ))
             .child(self.section("Compute", compute_row))
-            .child(
-                self.section(
-                    "Resilience",
-                    self.pill(
-                        "auto-restart",
-                        if auto_restart { "Auto-restart: on" } else { "Auto-restart: off" },
-                        auto_restart,
-                        |t, _, _| t.wizard.auto_restart = !t.wizard.auto_restart,
-                        cx,
-                    ),
+            .child(self.section(
+                "Resilience",
+                self.pill(
+                    "auto-restart",
+                    if auto_restart {
+                        "Auto-restart: on"
+                    } else {
+                        "Auto-restart: off"
+                    },
+                    auto_restart,
+                    |t, _, _| t.wizard.auto_restart = !t.wizard.auto_restart,
+                    cx,
                 ),
-            )
+            ))
             .when(!errors.is_empty(), |this| {
-                this.child(
-                    v_flex().gap_0p5().children(
-                        errors
-                            .iter()
-                            .map(|e| Label::new(e.clone()).size(LabelSize::Small).color(Color::Warning)),
-                    ),
-                )
+                this.child(v_flex().gap_0p5().children(errors.iter().map(|e| {
+                    Label::new(e.clone())
+                        .size(LabelSize::Small)
+                        .color(Color::Warning)
+                })))
             })
             .when_some(self.status.clone(), |this, status| {
-                this.child(Label::new(status).size(LabelSize::Small).color(Color::Accent))
+                this.child(
+                    Label::new(status)
+                        .size(LabelSize::Small)
+                        .color(Color::Accent),
+                )
             })
             .child(
                 Button::new("deploy-submit", "Deploy")

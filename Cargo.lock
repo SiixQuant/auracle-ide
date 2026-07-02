@@ -1427,6 +1427,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "auracle_live"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "auracle_live_ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auracle_connect",
+ "auracle_connections",
+ "auracle_live",
+ "auracle_panel_common",
+ "editor",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "auracle_onboarding"
 version = "0.1.0"
 dependencies = [
@@ -23068,6 +23094,7 @@ dependencies = [
  "auracle_agent_commands",
  "auracle_connect",
  "auracle_connections",
+ "auracle_live_ui",
  "auracle_onboarding",
  "auracle_status",
  "auto_update",

@@ -354,10 +354,7 @@ mod tests {
 
         w.aum = None;
         assert!(!w.can_deploy());
-        assert!(w
-            .validate()
-            .iter()
-            .any(|e| e.contains("Starting capital")));
+        assert!(w.validate().iter().any(|e| e.contains("Starting capital")));
 
         w.aum = Some(0.0);
         assert!(!w.can_deploy());
