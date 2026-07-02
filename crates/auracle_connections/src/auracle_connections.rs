@@ -242,6 +242,11 @@ fn base_url(config: &AuracleConfig) -> String {
         .unwrap_or_else(|| "http://127.0.0.1:1969".into())
 }
 
+/// The engine base URL as configured — for display in settings surfaces.
+pub fn engine_display_url() -> String {
+    base_url(&config())
+}
+
 /// Authenticated GET against a `/ui/api` route, returning parsed JSON. Made
 /// `pub` so sibling surfaces (the native settings panel) can read engine
 /// truths through the same loopback transport.
