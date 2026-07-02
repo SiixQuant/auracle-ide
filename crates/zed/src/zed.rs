@@ -742,8 +742,8 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let runs_dock = runs_dock::RunsDock::load(workspace_handle.clone(), cx.clone());
         let incidents_panel = incidents_panel::IncidentsPanel::load(workspace_handle.clone(), cx.clone());
         let blotter_panel = blotter_panel::BlotterPanel::load(workspace_handle.clone(), cx.clone());
-        let settings_panel =
-            auracle_onboarding::AuracleSettingsPanel::load(workspace_handle.clone(), cx.clone());
+        // The Auracle settings surface lives in the native settings window
+        // (settings_ui hosts its sections as pages) — no docked panel.
         let validation_rail = validation_rail::ValidationRail::load(workspace_handle.clone(), cx.clone());
         let strategies_panel = strategies_panel::StrategiesPanel::load(workspace_handle.clone(), cx.clone());
         let schedules_panel = schedules_panel::SchedulesPanel::load(workspace_handle.clone(), cx.clone());
@@ -778,7 +778,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(runs_dock, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(incidents_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(blotter_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(settings_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(validation_rail, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(strategies_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(schedules_panel, workspace_handle.clone(), cx.clone()),
