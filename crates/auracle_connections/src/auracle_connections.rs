@@ -242,6 +242,11 @@ fn base_url(config: &AuracleConfig) -> String {
         .unwrap_or_else(|| "http://127.0.0.1:1969".into())
 }
 
+/// The engine base URL as configured — for display in settings surfaces.
+pub fn engine_display_url() -> String {
+    base_url(&config())
+}
+
 /// Authenticated GET against a `/ui/api` route, returning parsed JSON. Made
 /// `pub` so sibling surfaces (the native settings panel) can read engine
 /// truths through the same loopback transport.
@@ -342,24 +347,7 @@ pub async fn get_capability(
 /// re-implementing the header dance.
 pub async fn fetch_csrf(http: Arc<dyn http_client::HttpClient>, config: &AuracleConfig) -> String {
     let key = config.api_key.clone().unwrap_or_default();
-    let Ok(request) = http_client::http::Request::builder()
-        .uri(format!("{}/ui/api/status", base_url(config)))
-        .header("X-API-Key", key.clone())
-        .header("Cookie", format!("auracle_session={key}"))
-        .body(http_client::AsyncBody::default())
-    else {
-        return String::new();
-    };
-    let Ok(response) = http.send(request).await else {
-        return String::new();
-    };
-    for value in response.headers().get_all("set-cookie") {
-        let Ok(cookie) = value.to_str() else { continue };
-        if let Some(rest) = cookie.strip_prefix("auracle_csrf=") {
-            return rest.split(';').next().unwrap_or("").to_string();
-        }
-    }
-    String::new()
+    auracle_connect::fetch_csrf(http, &base_url(config), &key).await
 }
 
 /// Authenticated, CSRF-correct POST/PUT-style mutation against a `/ui/api`

@@ -460,6 +460,14 @@ pub fn init(cx: &mut App) {
                     });
                 open_settings_editor(None, target_worktree_id, window_handle, cx);
             })
+            .register_action(|_, _: &auracle_onboarding::OpenConnections, window, cx| {
+                let window_handle = window.window_handle().downcast::<MultiWorkspace>();
+                open_auracle_page("Connections", window_handle, cx);
+            })
+            .register_action(|_, _: &auracle_connections::OpenBrokerWizard, window, cx| {
+                let window_handle = window.window_handle().downcast::<MultiWorkspace>();
+                open_auracle_page("Connections", window_handle, cx);
+            })
             .register_action(
                 |_, _: &zed_actions::assistant::OpenSkillCreator, window, cx| {
                     let window_handle = window.window_handle().downcast::<MultiWorkspace>();
@@ -749,6 +757,18 @@ pub fn open_skill_creator(
     });
 }
 
+/// Open the settings window landed on one of the Auracle root pages
+/// ("Account" / "Connections"). The one home for every settings entry point.
+pub fn open_auracle_page(
+    page_title: &'static str,
+    workspace_handle: Option<WindowHandle<MultiWorkspace>>,
+    cx: &mut App,
+) {
+    open_settings_editor_with(workspace_handle, cx, move |settings_window, _window, cx| {
+        settings_window.navigate_to_root_page(page_title, cx);
+    });
+}
+
 fn open_settings_editor_with(
     workspace_handle: Option<WindowHandle<MultiWorkspace>>,
     cx: &mut App,
@@ -967,6 +987,23 @@ enum SettingsPageItem {
     SubPageLink(SubPageLink),
     DynamicItem(DynamicItem),
     ActionLink(ActionLink),
+    CustomSection(CustomSection),
+}
+
+/// An arbitrarily-rendered block hosted inline on a settings page. Used for
+/// the Auracle pages (Account, Connections, agent model, git identity), whose
+/// engine-backed content doesn't decompose into `SettingItem` fields.
+#[derive(Clone)]
+struct CustomSection {
+    /// Search keyword source and stable identity for the block.
+    title: &'static str,
+    render: fn(&SettingsWindow, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
+}
+
+impl PartialEq for CustomSection {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title
+    }
 }
 
 impl std::fmt::Debug for SettingsPageItem {
@@ -984,6 +1021,9 @@ impl std::fmt::Debug for SettingsPageItem {
             }
             SettingsPageItem::ActionLink(action_link) => {
                 write!(f, "ActionLink({})", action_link.title)
+            }
+            SettingsPageItem::CustomSection(custom_section) => {
+                write!(f, "CustomSection({})", custom_section.title)
             }
         }
     }
@@ -1225,6 +1265,17 @@ impl SettingsPageItem {
 
                 return content.into_any_element();
             }
+            SettingsPageItem::CustomSection(custom_section) => v_flex()
+                .px_8()
+                .child(
+                    div()
+                        .id(("custom-section", item_index))
+                        .w_full()
+                        .map(apply_padding)
+                        .child((custom_section.render)(settings_window, window, cx)),
+                )
+                .when(bottom_border, |this| this.child(Divider::horizontal()))
+                .into_any_element(),
             SettingsPageItem::ActionLink(action_link) => v_flex()
                 .group("setting-item")
                 .px_8()
@@ -2058,6 +2109,11 @@ impl SettingsWindow {
                             any_found_since_last_header = true;
                         }
                     }
+                    // Engine-backed blocks are file-scope-independent —
+                    // always visible in both User and Project views.
+                    SettingsPageItem::CustomSection(_) => {
+                        any_found_since_last_header = true;
+                    }
                     SettingsPageItem::ActionLink(ActionLink { files, .. }) => {
                         if !files.contains(current_file) {
                             page_filter[index] = false;
@@ -2311,6 +2367,21 @@ impl SettingsWindow {
                             &mut fuzzy_match_candidates,
                             key_index,
                             action_link.title.as_ref(),
+                        );
+                    }
+                    SettingsPageItem::CustomSection(custom_section) => {
+                        documents.push(SearchDocument {
+                            id: key_index,
+                            words: split_into_words(&[
+                                page.title,
+                                header_str,
+                                custom_section.title,
+                            ]),
+                        });
+                        push_candidates(
+                            &mut fuzzy_match_candidates,
+                            key_index,
+                            custom_section.title,
                         );
                     }
                 }
@@ -4103,6 +4174,21 @@ impl SettingsWindow {
             let name_editor_focus_handle = page.read(cx).name_editor_focus_handle(cx);
             window.focus(&name_editor_focus_handle, cx);
         }
+    }
+
+    /// Land on a root nav page by its title (e.g. "Connections"), clearing
+    /// any open sub-page. No-op when the title is unknown.
+    pub fn navigate_to_root_page(&mut self, title: &str, cx: &mut Context<SettingsWindow>) {
+        self.sub_page_stack.clear();
+        if let Some(page_index) = self.pages.iter().position(|page| page.title == title)
+            && let Some(entry_index) = self
+                .navbar_entries
+                .iter()
+                .position(|entry| entry.page_index == page_index && entry.is_root)
+        {
+            self.open_navbar_entry_page(entry_index);
+        }
+        cx.notify();
     }
 
     pub fn navigate_to_skill_creator(

@@ -54,22 +54,11 @@ actions!(
     ]
 );
 
-pub fn init(cx: &mut App) {
-    cx.observe_new(|workspace: &mut Workspace, _, _| {
-        // Both the settings deep-link (`OpenConnections`) and the deploy /
-        // legacy connect path (`OpenBrokerWizard`, kept for back-compat after
-        // the modal's retirement) focus the one docked panel — there is no
-        // separate wizard surface anymore.
-        workspace.register_action(|workspace, _: &OpenConnections, window, cx| {
-            workspace.focus_panel::<AuracleSettingsPanel>(window, cx);
-        });
-        workspace.register_action(
-            |workspace, _: &auracle_connections::OpenBrokerWizard, window, cx| {
-                workspace.focus_panel::<AuracleSettingsPanel>(window, cx);
-            },
-        );
-    })
-    .detach();
+pub fn init(_cx: &mut App) {
+    // `OpenConnections` / `OpenBrokerWizard` are handled by `settings_ui`,
+    // which opens the native settings window at the Connections page. The
+    // handlers can't live here: settings_ui depends on this crate to embed
+    // the section bodies, so registering them here would be a dep cycle.
 }
 
 // ── Sections ──────────────────────────────────────────────────────────
@@ -80,6 +69,7 @@ pub fn init(cx: &mut App) {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Section {
     Account,
+    Engine,
     Broker,
     Data,
     QuantConnect,
@@ -92,6 +82,7 @@ impl Section {
     fn key(self) -> &'static str {
         match self {
             Section::Account => "sec-account",
+            Section::Engine => "sec-engine",
             Section::Broker => "sec-broker",
             Section::Data => "sec-data",
             Section::QuantConnect => "sec-qc",
@@ -103,6 +94,7 @@ impl Section {
     fn title(self) -> &'static str {
         match self {
             Section::Account => "Account",
+            Section::Engine => "Engine",
             Section::Broker => "Broker",
             Section::Data => "Data sources",
             Section::QuantConnect => "QuantConnect",
@@ -111,8 +103,9 @@ impl Section {
         }
     }
 
-    const ALL: [Section; 6] = [
+    const ALL: [Section; 7] = [
         Section::Account,
+        Section::Engine,
         Section::Broker,
         Section::Data,
         Section::QuantConnect,
@@ -127,6 +120,12 @@ enum TestState {
     Idle,
     Working,
     Verdict { ok: bool, plain: SharedString },
+}
+
+/// The engine-reachability truth shown at the top of the Connections page.
+struct EngineInfo {
+    reachable: bool,
+    version: String,
 }
 
 enum GitHubAuthState {
@@ -145,9 +144,53 @@ enum ModelStatus {
     },
 }
 
+/// One panel section hosted inside the native settings window. Each native
+/// page embeds its own panel instance scoped to a single section, so the
+/// window gets native section headers while this crate keeps owning the
+/// engine-backed bodies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EmbedScope {
+    Account,
+    Engine,
+    Brokers,
+    Data,
+    Integrations,
+    AiModel,
+    GitHub,
+}
+
+impl EmbedScope {
+    pub fn key(self) -> &'static str {
+        match self {
+            EmbedScope::Account => "embed-account",
+            EmbedScope::Engine => "embed-engine",
+            EmbedScope::Brokers => "embed-brokers",
+            EmbedScope::Data => "embed-data",
+            EmbedScope::Integrations => "embed-integrations",
+            EmbedScope::AiModel => "embed-ai",
+            EmbedScope::GitHub => "embed-github",
+        }
+    }
+
+    fn section(self) -> Section {
+        match self {
+            EmbedScope::Account => Section::Account,
+            EmbedScope::Engine => Section::Engine,
+            EmbedScope::Brokers => Section::Broker,
+            EmbedScope::Data => Section::Data,
+            EmbedScope::Integrations => Section::QuantConnect,
+            EmbedScope::AiModel => Section::AiModel,
+            EmbedScope::GitHub => Section::GitHub,
+        }
+    }
+}
+
 pub struct AuracleSettingsPanel {
     focus_handle: FocusHandle,
-    workspace: WeakEntity<Workspace>,
+    workspace: Option<WeakEntity<Workspace>>,
+    /// `Some` when this instance renders exactly one section body inside the
+    /// native settings window; `None` for the legacy docked panel rendering.
+    scope: Option<EmbedScope>,
 
     // Section disclosure
     expanded: HashSet<Section>,
@@ -159,6 +202,8 @@ pub struct AuracleSettingsPanel {
     brokers: Vec<Connector>,
     data_providers: Vec<Connector>,
     integrations: Vec<Connector>,
+    /// `None` until the first status round-trip resolves.
+    engine_info: Option<EngineInfo>,
 
     // Active connector detail (the master-detail "detail" pane). The section
     // disambiguates connectors that share an id across kinds (e.g. Alpaca).
@@ -215,66 +260,87 @@ impl AuracleSettingsPanel {
     ) -> Result<Entity<Self>> {
         workspace.update_in(&mut cx, |workspace, window, cx| {
             let weak = workspace.weak_handle();
-            cx.new(|cx| {
-                // Reconnecting (a new saved connection, anywhere) reloads the
-                // connectors, the account, and the shared truths, and re-runs
-                // the AI-key import — mirrors how the blotter reloads on a
-                // ConnectGeneration bump.
-                cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
-                    this.load_connectors(cx);
-                    this.load_account(cx);
-                    this.load_shared_and_import(cx);
-                })
-                .detach();
-
-                let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
-                for _ in 0..auracle_connections::MAX_FIELDS {
-                    editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
-                }
-                let mut this = Self {
-                    focus_handle: cx.focus_handle(),
-                    workspace: weak,
-                    // Account + Broker open by default; the first connector load
-                    // opens any other section that needs attention.
-                    expanded: HashSet::from([Section::Account, Section::Broker]),
-                    did_auto_expand: false,
-                    brokers: Vec::new(),
-                    data_providers: Vec::new(),
-                    integrations: Vec::new(),
-                    selected_connector: None,
-                    fields: Vec::new(),
-                    fields_loaded: false,
-                    editors,
-                    selections: std::collections::HashMap::new(),
-                    capability: None,
-                    connector_saved: false,
-                    test_state: TestState::Idle,
-                    account: None,
-                    provider_view: None,
-                    model_id_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    model_status: ModelStatus::Idle,
-                    git_name_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    git_email_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
-                    git_identity_saved: false,
-                    github_state: GitHubAuthState::Unknown,
-                    shared: None,
-                    _connector_task: None,
-                    _account_task: None,
-                    _shared_task: None,
-                    _github_task: None,
-                    _mirror_task: None,
-                };
-                this.load_connectors(cx);
-                this.load_account(cx);
-                this.load_shared_and_import(cx);
-                this.check_github(cx);
-                this
-            })
+            cx.new(|cx| Self::construct(Some(weak), None, window, cx))
         })
     }
 
+    /// A single-section instance for the native settings window. `workspace`
+    /// is best-effort (derived from the settings window's originating
+    /// workspace when available) — only the git-identity save needs it.
+    pub fn embedded(
+        scope: EmbedScope,
+        workspace: Option<WeakEntity<Workspace>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::construct(workspace, Some(scope), window, cx)
+    }
+
+    fn construct(
+        workspace: Option<WeakEntity<Workspace>>,
+        scope: Option<EmbedScope>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Reconnecting (a new saved connection, anywhere) reloads the
+        // connectors, the account, and the shared truths, and re-runs
+        // the AI-key import — mirrors how the blotter reloads on a
+        // ConnectGeneration bump.
+        cx.observe_global::<auracle_connect::ConnectGeneration>(|this: &mut Self, cx| {
+            this.load_connectors(cx);
+            this.load_account(cx);
+            this.load_shared_and_import(cx);
+        })
+        .detach();
+
+        let mut editors = Vec::with_capacity(auracle_connections::MAX_FIELDS);
+        for _ in 0..auracle_connections::MAX_FIELDS {
+            editors.push(cx.new(|cx| editor::Editor::single_line(window, cx)));
+        }
+        let mut this = Self {
+            focus_handle: cx.focus_handle(),
+            workspace,
+            scope,
+            // Account + Broker open by default; the first connector load
+            // opens any other section that needs attention.
+            expanded: HashSet::from([Section::Account, Section::Broker]),
+            did_auto_expand: false,
+            brokers: Vec::new(),
+            data_providers: Vec::new(),
+            integrations: Vec::new(),
+            engine_info: None,
+            selected_connector: None,
+            fields: Vec::new(),
+            fields_loaded: false,
+            editors,
+            selections: std::collections::HashMap::new(),
+            capability: None,
+            connector_saved: false,
+            test_state: TestState::Idle,
+            account: None,
+            provider_view: None,
+            model_id_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            model_status: ModelStatus::Idle,
+            git_name_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            git_email_editor: cx.new(|cx| editor::Editor::single_line(window, cx)),
+            git_identity_saved: false,
+            github_state: GitHubAuthState::Unknown,
+            shared: None,
+            _connector_task: None,
+            _account_task: None,
+            _shared_task: None,
+            _github_task: None,
+            _mirror_task: None,
+        };
+        this.load_connectors(cx);
+        this.load_account(cx);
+        this.load_shared_and_import(cx);
+        this.check_github(cx);
+        this
+    }
+
     fn fs(&self, cx: &App) -> Option<Arc<dyn fs::Fs>> {
-        let workspace = self.workspace.upgrade()?;
+        let workspace = self.workspace.as_ref()?.upgrade()?;
         Some(workspace.read(cx).project().read(cx).fs().clone())
     }
 
@@ -353,10 +419,25 @@ impl AuracleSettingsPanel {
             let data = auracle_connections::list_connectors(http.clone(), "data_provider")
                 .await
                 .unwrap_or_default();
-            let integrations = auracle_connections::list_connectors(http, "integration")
+            let integrations = auracle_connections::list_connectors(http.clone(), "integration")
                 .await
                 .unwrap_or_default();
+            let engine_status = auracle_connections::get_json(http, "/ui/api/status").await;
             this.update(cx, |this, cx| {
+                this.engine_info = Some(match &engine_status {
+                    Ok(value) => EngineInfo {
+                        reachable: true,
+                        version: value
+                            .get("version")
+                            .and_then(|version| version.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                    Err(_) => EngineInfo {
+                        reachable: false,
+                        version: String::new(),
+                    },
+                });
                 this.brokers = brokers;
                 this.data_providers = data;
                 this.integrations = integrations;
@@ -531,6 +612,12 @@ impl AuracleSettingsPanel {
         let Some(connector) = self.active_connector_id() else {
             return;
         };
+        self.disconnect_connector_by_id(connector, cx);
+    }
+
+    /// Disconnect a specific connector without opening its detail — the list
+    /// rows offer this directly.
+    fn disconnect_connector_by_id(&mut self, connector: String, cx: &mut Context<Self>) {
         let http = cx.http_client();
         self.test_state = TestState::Working;
         cx.notify();
@@ -934,6 +1021,11 @@ impl AuracleSettingsPanel {
                     (format!("{tier} · {email}"), Color::Muted)
                 }
             },
+            Section::Engine => match &self.engine_info {
+                None => ("Checking…".into(), Color::Muted),
+                Some(info) if info.reachable => ("Connected".into(), Color::Success),
+                Some(_) => ("Unreachable".into(), Color::Error),
+            },
             Section::Broker => connector_summary_line(&self.brokers),
             Section::Data => connector_summary_line(&self.data_providers),
             Section::QuantConnect => connector_summary_line(&self.integrations),
@@ -955,6 +1047,7 @@ impl AuracleSettingsPanel {
     fn render_section_body(&self, section: Section, cx: &mut Context<Self>) -> AnyElement {
         match section {
             Section::Account => self.render_account(cx),
+            Section::Engine => self.render_engine(),
             Section::Broker | Section::Data | Section::QuantConnect => {
                 self.render_connector_section(section, cx)
             }
@@ -963,13 +1056,8 @@ impl AuracleSettingsPanel {
         }
     }
 
-    fn render_account(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(account) = &self.account else {
-            return Label::new("Reading your account from the engine…")
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .into_any_element();
-        };
+    fn render_engine(&self) -> AnyElement {
+        let url = auracle_connections::engine_display_url();
         let row = |label: &str, value: String, value_color: Color| {
             h_flex()
                 .justify_between()
@@ -980,6 +1068,40 @@ impl AuracleSettingsPanel {
                         .color(Color::Muted),
                 )
                 .child(Label::new(value).size(LabelSize::Small).color(value_color))
+        };
+        let mut body = v_flex().gap_2().child(row("Engine", url, Color::Default));
+        match &self.engine_info {
+            None => {
+                body = body.child(row("Status", "Checking…".to_string(), Color::Muted));
+            }
+            Some(info) if info.reachable => {
+                body = body.child(row("Status", "Connected".to_string(), Color::Success));
+                if !info.version.is_empty() {
+                    body = body.child(row("Version", info.version.clone(), Color::Default));
+                }
+            }
+            Some(_) => {
+                body = body
+                    .child(row("Status", "Unreachable".to_string(), Color::Error))
+                    .child(
+                        Label::new(
+                            "Start Auracle from the launcher — every connection below \
+                             rides this engine session.",
+                        )
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                    );
+            }
+        }
+        body.into_any_element()
+    }
+
+    fn render_account(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(account) = &self.account else {
+            return Label::new("Reading your account from the engine…")
+                .size(LabelSize::Small)
+                .color(Color::Muted)
+                .into_any_element();
         };
         let tier = if account.tier.is_empty() {
             "—".to_string()
@@ -1002,11 +1124,56 @@ impl AuracleSettingsPanel {
             _ => ("No active license".to_string(), Color::Warning),
         };
 
-        let mut body = v_flex()
-            .gap_2()
-            .child(row("Email", email, Color::Default))
-            .child(row("Plan", tier, Color::Default))
-            .child(row("License", license_text, license_color));
+        let border = cx.theme().colors().border;
+        let chip_background = cx.theme().colors().ghost_element_background;
+        let tile_background = cx.theme().colors().element_selected;
+        let initial = email
+            .chars()
+            .next()
+            .map(|letter| letter.to_ascii_uppercase())
+            .unwrap_or('•');
+        let chip = |text: String, color: Color| {
+            h_flex()
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .border_1()
+                .border_color(border)
+                .bg(chip_background)
+                .child(Label::new(text).size(LabelSize::Small).color(color))
+        };
+        let plan_chip = chip(
+            if tier == "—" {
+                "No plan".to_string()
+            } else {
+                format!("{tier} plan")
+            },
+            Color::Default,
+        );
+        let license_chip = chip(license_text, license_color);
+
+        let mut body = v_flex().gap_3().child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .size_8()
+                        .flex_none()
+                        .rounded_full()
+                        .bg(tile_background)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Label::new(initial.to_string())),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new(email))
+                        .child(h_flex().gap_2().child(plan_chip).child(license_chip)),
+                ),
+        );
 
         if let Some(url) = account.manage_url.clone() {
             body = body.child(
@@ -1065,10 +1232,13 @@ impl AuracleSettingsPanel {
             let gated = connector.gated;
             let blurb = connector.blurb.clone();
             let has_logo = broker_logo_path(&connector.id).is_some();
+            let keyless = matches!(id.as_str(), "yfinance" | "simulator");
             let (status_text, status_color) = if gated {
                 ("Upgrade to use", Color::Warning)
             } else if connected {
                 ("Connected", Color::Success)
+            } else if keyless {
+                ("Ready — no key needed", Color::Success)
             } else {
                 ("Not connected", Color::Muted)
             };
@@ -1100,15 +1270,48 @@ impl AuracleSettingsPanel {
                                 column.child(
                                     Label::new(blurb.clone())
                                         .size(LabelSize::Small)
-                                        .color(Color::Muted),
+                                        .color(Color::Muted)
+                                        .truncate(),
                                 )
                             }),
                     )
+                    .when(connected && !gated, |row| {
+                        let disconnect_id = id.clone();
+                        row.child(
+                            Button::new(
+                                SharedString::from(format!("dc-{}-{}", section.key(), id)),
+                                "Disconnect",
+                            )
+                            .style(ButtonStyle::Subtle)
+                            .label_size(LabelSize::Small)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.disconnect_connector_by_id(disconnect_id.clone(), cx);
+                                },
+                            )),
+                        )
+                    })
                     .child(
                         Label::new(status_text)
                             .size(LabelSize::Small)
                             .color(status_color),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronRight)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
                     ),
+            );
+        }
+        if section == Section::Data {
+            list = list.child(
+                Label::new(
+                    "Deployments read from the first listed source that can serve \
+                     them — sources never stream in parallel.",
+                )
+                .size(LabelSize::Small)
+                .color(Color::Muted),
             );
         }
         list.into_any_element()
@@ -1498,6 +1701,17 @@ fn connector_summary_line(connectors: &[Connector]) -> (String, Color) {
 
 impl Render for AuracleSettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Embedded in the native settings window: exactly one section body,
+        // always open — the window supplies the page/section chrome.
+        if let Some(scope) = self.scope {
+            return v_flex()
+                .id(scope.key())
+                .w_full()
+                .gap_3()
+                .child(self.render_section_body(scope.section(), cx))
+                .into_any_element();
+        }
+
         let mut column = v_flex()
             .id("auracle-settings-panel")
             .key_context("AuracleSettingsPanel")
@@ -1511,6 +1725,6 @@ impl Render for AuracleSettingsPanel {
         for section in Section::ALL {
             column = column.child(self.render_section(section, cx));
         }
-        column
+        column.into_any_element()
     }
 }

@@ -369,10 +369,10 @@ impl Render for TitleBar {
                 .child(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
-                // The signed-in account chip (email + tier) — the profile
-                // indicator. Reflects Auracle's own identity from the engine,
-                // not Zed's collab account; renders nothing when no account.
-                .children(self.render_account_chip(cx))
+                // The account chip (email + tier when signed in, "Sign in"
+                // when not) — the profile indicator. Reflects Auracle's own
+                // identity from the engine, not Zed's collab account.
+                .child(self.render_account_chip(cx))
                 // Always-present Auracle Settings entry. Zed's native account
                 // menu (which also held Settings) is gated off by the
                 // white-label (`show_user_menu=false`) because it opens
@@ -579,30 +579,42 @@ impl TitleBar {
     /// The signed-in account chip shown left of the Settings gear: the operator's
     /// email, with the tier in the tooltip. Renders nothing when no account is
     /// configured. Clicking opens the Auracle settings panel.
-    fn render_account_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let account = self.account.clone()?;
-        let tooltip = if account.tier.trim().is_empty() {
-            format!("Signed in as {}", account.email)
-        } else {
-            format!("Signed in as {} · {}", account.email, account.tier)
+    fn render_account_chip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Always present so the top-right keeps a profile/identity affordance
+        // even on the key-less Community default (signed out) — Zed's own
+        // account menu is gated off (`show_user_menu=false`), so this chip +
+        // the Settings gear are the whole top-right presence. Signed in: the
+        // operator's email + tier; signed out: a muted "Sign in" chip. Either
+        // way it opens the Auracle settings/account home, never zed.dev.
+        let (label, tooltip): (String, String) = match self.account.clone() {
+            Some(account) if !account.email.trim().is_empty() => {
+                let tip = if account.tier.trim().is_empty() {
+                    format!("Signed in as {}", account.email)
+                } else {
+                    format!("Signed in as {} · {}", account.email, account.tier)
+                };
+                (account.email, tip)
+            }
+            _ => (
+                "Sign in".to_string(),
+                "Sign in to Auracle (optional — Community is free)".to_string(),
+            ),
         };
-        Some(
-            div()
-                .id("auracle-account")
-                .cursor_pointer()
-                .child(
-                    Label::new(account.email.clone())
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                )
-                .tooltip(Tooltip::text(tooltip))
-                .on_click(cx.listener(|_, _, window, cx| {
-                    window.dispatch_action(
-                        auracle_onboarding::OpenConnections.boxed_clone(),
-                        cx,
-                    );
-                })),
-        )
+        div()
+            .id("auracle-account")
+            .cursor_pointer()
+            .child(
+                Label::new(label)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .tooltip(Tooltip::text(tooltip))
+            .on_click(cx.listener(|_, _, window, cx| {
+                window.dispatch_action(
+                    auracle_onboarding::OpenConnections.boxed_clone(),
+                    cx,
+                );
+            }))
     }
 
     fn worktree_count(&self, cx: &App) -> usize {

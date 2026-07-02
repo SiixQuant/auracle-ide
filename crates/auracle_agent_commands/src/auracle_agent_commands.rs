@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use agent_ui::AgentPanel;
-use futures::AsyncReadExt as _;
 use gpui::{App, Context, Window, actions};
 use workspace::Workspace;
 
@@ -182,10 +181,7 @@ fn deploy_with_broker_gate(
                 } else {
                     // No execution broker yet — open the connect wizard so
                     // the user can connect right here, then deploy.
-                    window.dispatch_action(
-                        Box::new(auracle_connections::OpenBrokerWizard),
-                        cx,
-                    );
+                    window.dispatch_action(Box::new(auracle_connections::OpenBrokerWizard), cx);
                 }
             })
             .ok();
@@ -198,33 +194,17 @@ fn deploy_with_broker_gate(
 /// returns false so the wizard is offered rather than silently skipped.
 async fn broker_configured(http: Arc<dyn http_client::HttpClient>) -> bool {
     let config = auracle_connect::load_config();
-    let key = config.api_key.clone().unwrap_or_default();
-    if key.trim().is_empty() {
+    if config.api_key.unwrap_or_default().trim().is_empty() {
         return false;
     }
-    let url = config
-        .engine_url
-        .clone()
-        .unwrap_or_else(|| "http://127.0.0.1:1969".into());
-    let attempt: anyhow::Result<bool> = async {
-        let request = http_client::http::Request::builder()
-            .uri(format!("{url}/ui/api/capabilities"))
-            .header("X-API-Key", key.clone())
-            .header("Cookie", format!("auracle_session={key}"))
-            .body(http_client::AsyncBody::default())?;
-        let mut response = http.send(request).await?;
-        if !response.status().is_success() {
-            anyhow::bail!("status {}", response.status());
-        }
-        let mut body = String::new();
-        response.body_mut().read_to_string(&mut body).await?;
-        let value: serde_json::Value = serde_json::from_str(&body)?;
-        Ok(value
-            .get("active_broker")
-            .and_then(|v| v.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false))
-    }
-    .await;
-    attempt.unwrap_or(false)
+    auracle_connections::get_json(http, "/ui/api/capabilities")
+        .await
+        .ok()
+        .and_then(|value| {
+            value
+                .get("active_broker")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+        })
+        .unwrap_or(false)
 }

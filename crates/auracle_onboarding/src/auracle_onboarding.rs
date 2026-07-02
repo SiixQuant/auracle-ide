@@ -25,7 +25,7 @@
 
 pub mod settings_panel;
 
-pub use settings_panel::{AuracleSettingsPanel, OpenConnections};
+pub use settings_panel::{AuracleSettingsPanel, EmbedScope, OpenConnections};
 
 use std::sync::Arc;
 
